@@ -76,6 +76,8 @@ class NetDiag(private val dir: File) {
                 else "网络 I/O 失败（${cause.message?.take(80) ?: "连接中断"}）"
             is retrofit2.HttpException -> "服务器返回 HTTP ${cause.code()}"
             is kotlinx.serialization.SerializationException -> "响应数据解析失败（返回内容异常）"
+            is android.database.sqlite.SQLiteException ->
+                "本地数据库写入异常（${cause.message?.take(80)}）"
             is IllegalStateException -> "响应状态异常（${cause.message?.take(80)}）"
             else -> "${cause.javaClass.simpleName}: ${cause.message?.take(80) ?: "未知错误"}"
         }

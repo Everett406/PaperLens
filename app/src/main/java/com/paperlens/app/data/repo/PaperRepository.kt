@@ -1,5 +1,6 @@
 package com.paperlens.app.data.repo
 
+import androidx.room.withTransaction
 import com.paperlens.app.data.db.AppDatabase
 import com.paperlens.app.data.db.PaperEntity
 import com.paperlens.app.data.db.toDomain
@@ -206,7 +207,7 @@ class PaperRepository(
                 paperUrl = e.paperUrl,
             )
         }
-        db.paperDao().upsertAll(entities)
+        db.withTransaction { db.paperDao().upsertAll(entities) }
     }
 
     /** 镜像 JSON → 论文实体（来源仍记 ARXIV_ALL，用户无感知差别）。 */
@@ -226,7 +227,7 @@ class PaperRepository(
                 paperUrl = p.paperUrl ?: "https://arxiv.org/abs/${p.arxivId}",
             )
         }
-        db.paperDao().upsertAll(entities)
+        db.withTransaction { db.paperDao().upsertAll(entities) }
     }
 
     /**

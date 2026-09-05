@@ -5,69 +5,44 @@ import androidx.room.Embedded
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Update
 import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface PaperDao {
 
-    /**
-     * 带来源优先级的 upsert：
-     * - 标题/摘要/时间等字段以最新抓取为准；
-     * - source 只升不降（HF_DAILY > ARXIV > ARXIV_ALL > SEARCH）：一篇先被搜索缓存、后被订阅命中的论文
-     *   应归入订阅流；反之被 HF 榜单收录的论文永远留在精选流；
-     * - sourceKeyword 保留首次认领的关键词；
-     * - upvotes 取较大值，避免非 HF 来源的抓取把 HF 点赞数清零。
-     */
-    @Query(
-        """
-        INSERT INTO papers (arxivId, title, authors, abstractText, upvotes, source, sourceKeyword, publishedAt, fetchedAt, paperUrl)
-        VALUES (:arxivId, :title, :authors, :abstractText, :upvotes, :source, :sourceKeyword, :publishedAt, :fetchedAt, :paperUrl)
-        ON CONFLICT(arxivId) DO UPDATE SET
-            title = excluded.title,
-            authors = excluded.authors,
-            abstractText = excluded.abstractText,
-            upvotes = MAX(papers.upvotes, excluded.upvotes),
-            publishedAt = excluded.publishedAt,
-            fetchedAt = excluded.fetchedAt,
-            paperUrl = COALESCE(excluded.paperUrl, papers.paperUrl),
-            source = CASE
-                WHEN papers.source = 'HF_DAILY' THEN 'HF_DAILY'
-                WHEN papers.source = 'ARXIV' THEN 'ARXIV'
-                WHEN papers.source = 'ARXIV_ALL' AND excluded.source = 'SEARCH' THEN 'ARXIV_ALL'
-                ELSE excluded.source
-            END,
-            sourceKeyword = COALESCE(papers.sourceKeyword, excluded.sourceKeyword)
-        """
-    )
-    suspend fun upsertOne(
-        arxivId: String,
-        title: String,
-        authors: List<String>,
-        abstractText: String,
-        upvotes: Int,
-        source: String,
-        sourceKeyword: String?,
-        publishedAt: Long,
-        fetchedAt: Long,
-        paperUrl: String?,
-    )
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertFresh(entity: PaperEntity): Long
 
+    @Update
+    suspend fun updateExisting(entity: PaperEntity)
+
+    /**
+     * upsert（v1.4.1 重写为实体化写入）：
+     * 行不存在 → 直接插入；已存在 → Kotlin 侧逐字段合并后更新，语义与旧版
+     * 裸 SQL 的 ON CONFLICT 完全一致：
+     * - 内容字段（标题/作者/摘要/发布时间/链接）以最新抓取为准；
+     * - source 只升不降（HF_DAILY > ARXIV > ARXIV_ALL > SEARCH）：一篇先被搜索缓存、
+     *   后被订阅命中的论文应归入订阅流；反之被 HF 榜单收录过的论文永远留在精选流；
+     * - sourceKeyword 保留首次认领的关键词；
+     * - upvotes 取较大值，避免低优先级来源的抓取把高优先级点赞数清零。
+     *
+     * 为什么不再用裸 SQL INSERT：Room 对裸 @Query 里的 List 参数按集合展开成
+     * N 个占位符（不经过 authors 的 TypeConverter），列表一长就编译出
+     * 「13 values for 10 columns」的非法 SQL，运行期 SQLiteException，
+     * 且被上层 catch 误报成网络失败 —— 这是 v1.0 起所有渠道「永远没数据」的真凶。
+     * 实体化 @Insert/@Update 走 TypeConverter 绑定，天然正确。
+     */
     suspend fun upsertAll(papers: List<PaperEntity>) {
         val now = System.currentTimeMillis()
         papers.forEach { p ->
-            upsertOne(
-                arxivId = p.arxivId,
-                title = p.title,
-                authors = p.authors,
-                abstractText = p.abstractText,
-                upvotes = p.upvotes,
-                source = p.source,
-                sourceKeyword = p.sourceKeyword,
-                publishedAt = p.publishedAt,
-                fetchedAt = p.fetchedAt.takeIf { it > 0 } ?: now,
-                paperUrl = p.paperUrl,
-            )
+            val entity = if (p.fetchedAt > 0) p else p.copy(fetchedAt = now)
+            val existing = paperOnce(entity.arxivId)
+            when {
+                existing == null -> insertFresh(entity)
+                else -> updateExisting(mergeForUpsert(existing, entity))
+            }
         }
     }
 
@@ -101,6 +76,24 @@ interface PaperDao {
     @Query("DELETE FROM papers WHERE arxivId NOT IN (SELECT arxivId FROM shelf)")
     suspend fun clearUnshelved()
 }
+
+/** 来源优先级：数值大者优先保留；未知来源按最低档处理。 */
+private val SOURCE_RANK = mapOf("HF_DAILY" to 4, "ARXIV" to 3, "ARXIV_ALL" to 2)
+
+private fun mergeSource(old: String, new: String): String =
+    if ((SOURCE_RANK[old] ?: 1) > (SOURCE_RANK[new] ?: 1)) old else new
+
+private fun mergeForUpsert(old: PaperEntity, new: PaperEntity): PaperEntity = old.copy(
+    title = new.title,
+    authors = new.authors,
+    abstractText = new.abstractText,
+    upvotes = maxOf(old.upvotes, new.upvotes),
+    publishedAt = new.publishedAt,
+    fetchedAt = new.fetchedAt,
+    paperUrl = new.paperUrl ?: old.paperUrl,
+    source = mergeSource(old.source, new.source),
+    sourceKeyword = old.sourceKeyword ?: new.sourceKeyword,
+)
 
 @Dao
 interface ShelfDao {
