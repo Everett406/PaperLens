@@ -244,15 +244,20 @@ fun SearchScreen(
 
             !ui.searching && ui.searchedOnce && ui.results.isEmpty() -> {
                 EmptyState(
-                    title = if (ui.offline) "离线状态，且本地没有相关缓存" else "没有找到相关论文",
-                    subtitle = if (ui.offline) "联网后重试即可" else "换个关键词试试，例如 \"graph neural network\"",
+                    title = when {
+                        ui.errorMessage != null -> "检索没成功"
+                        ui.offline -> "离线状态，且本地没有相关缓存"
+                        else -> "没有找到相关论文"
+                    },
+                    subtitle = ui.errorMessage
+                        ?: if (ui.offline) "联网后重试即可" else "换个关键词试试，例如 \"graph neural network\"",
                 )
             }
 
             ui.results.isNotEmpty() -> {
-                if (ui.offline) {
+                if (ui.offline || ui.errorMessage != null) {
                     Text(
-                        text = "当前离线，展示本地缓存结果",
+                        text = ui.errorMessage ?: "当前离线，展示本地缓存结果",
                         fontSize = 11.5.sp,
                         color = colors.onSurfaceVariantActions,
                         modifier = Modifier

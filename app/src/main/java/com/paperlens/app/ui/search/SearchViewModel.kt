@@ -4,7 +4,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.paperlens.app.di.AppGraph
 import com.paperlens.app.domain.Paper
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -16,10 +18,12 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 
 /**
  * 搜索（规格二）：全屏页、500ms 防抖实时调 arXiv（标题/摘要），
- * 最近 10 条历史存 Room；断网回退本地缓存 LIKE 匹配（保证验收「断网可浏览」体验）。
+ * 最近 10 条历史存 Room；联网失败/超时回退本地缓存 LIKE 匹配（保证「断网可浏览」体验）。
+ * v1.2：加了硬超时与错误归因 —— 之前 arXiv 慢/不可达时会永远停在「正在检索」。
  */
 class SearchViewModel(private val graph: AppGraph) : ViewModel() {
 
@@ -29,6 +33,8 @@ class SearchViewModel(private val graph: AppGraph) : ViewModel() {
         val offline: Boolean = false,
         val searching: Boolean = false,
         val searchedOnce: Boolean = false,
+        /** 最近一次检索失败的原因（中文，可空）。结果非空时展示为顶部提示。 */
+        val errorMessage: String? = null,
     )
 
     private val _ui = MutableStateFlow(UiState())
@@ -51,32 +57,44 @@ class SearchViewModel(private val graph: AppGraph) : ViewModel() {
                 .distinctUntilChanged()
                 .filter { it.isNotBlank() }
                 .collectLatest { q ->
-                    _ui.update { it.copy(searching = true) }
-                    runCatching { graph.paperRepository.searchArxiv(q, maxResults = 25) }
-                        .onSuccess { papers ->
-                            _ui.update {
-                                it.copy(
-                                    results = papers,
-                                    offline = false,
-                                    searching = false,
-                                    searchedOnce = true,
-                                )
-                            }
-                            graph.searchRepository.record(q)
+                    _ui.update { it.copy(searching = true, errorMessage = null) }
+                    try {
+                        // 硬超时：包含排队等待 arXiv 闸门的时间，最多 45s 必须给用户交代
+                        val papers = withTimeout(SEARCH_TIMEOUT_MS) {
+                            graph.paperRepository.searchArxiv(q, maxResults = 25)
                         }
-                        .onFailure {
-                            // 断网/失败 → 本地缓存 LIKE 兜底，仍可浏览
-                            val cached = graph.paperRepository.searchCached(q).first()
-                            _ui.update {
-                                it.copy(
-                                    results = cached,
-                                    offline = true,
-                                    searching = false,
-                                    searchedOnce = true,
-                                )
-                            }
+                        _ui.update {
+                            it.copy(
+                                results = papers,
+                                offline = false,
+                                searching = false,
+                                searchedOnce = true,
+                                errorMessage = null,
+                            )
                         }
+                        graph.searchRepository.record(q)
+                    } catch (te: TimeoutCancellationException) {
+                        fallbackToCache(q, "检索超时：arXiv 响应缓慢或网络不稳定，稍后再试一次")
+                    } catch (ce: CancellationException) {
+                        throw ce   // collectLatest 因新输入取消旧任务，属于正常流程
+                    } catch (e: Exception) {
+                        fallbackToCache(q, "检索失败：arXiv 暂时连不上，先看看本地缓存")
+                    }
                 }
+        }
+    }
+
+    /** 网络检索失败 → 本地缓存 LIKE 兜底，仍可浏览，并带上失败原因。 */
+    private suspend fun fallbackToCache(q: String, message: String) {
+        val cached = runCatching { graph.paperRepository.searchCached(q).first() }.getOrDefault(emptyList())
+        _ui.update {
+            it.copy(
+                results = cached,
+                offline = true,
+                searching = false,
+                searchedOnce = true,
+                errorMessage = message,
+            )
         }
     }
 
@@ -97,5 +115,9 @@ class SearchViewModel(private val graph: AppGraph) : ViewModel() {
                 graph.shelfRepository.save(paper)
             }
         }
+    }
+
+    companion object {
+        private const val SEARCH_TIMEOUT_MS = 45_000L
     }
 }

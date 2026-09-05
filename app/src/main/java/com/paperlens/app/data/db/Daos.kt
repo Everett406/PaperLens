@@ -14,7 +14,7 @@ interface PaperDao {
     /**
      * 带来源优先级的 upsert：
      * - 标题/摘要/时间等字段以最新抓取为准；
-     * - source 只升不降（HF_DAILY > ARXIV > SEARCH）：一篇先被搜索缓存、后被订阅命中的论文
+     * - source 只升不降（HF_DAILY > ARXIV > ARXIV_ALL > SEARCH）：一篇先被搜索缓存、后被订阅命中的论文
      *   应归入订阅流；反之被 HF 榜单收录的论文永远留在精选流；
      * - sourceKeyword 保留首次认领的关键词；
      * - upvotes 取较大值，避免非 HF 来源的抓取把 HF 点赞数清零。
@@ -33,7 +33,8 @@ interface PaperDao {
             paperUrl = COALESCE(excluded.paperUrl, papers.paperUrl),
             source = CASE
                 WHEN papers.source = 'HF_DAILY' THEN 'HF_DAILY'
-                WHEN papers.source = 'ARXIV' AND excluded.source = 'SEARCH' THEN 'ARXIV'
+                WHEN papers.source = 'ARXIV' THEN 'ARXIV'
+                WHEN papers.source = 'ARXIV_ALL' AND excluded.source = 'SEARCH' THEN 'ARXIV_ALL'
                 ELSE excluded.source
             END,
             sourceKeyword = COALESCE(papers.sourceKeyword, excluded.sourceKeyword)
@@ -75,6 +76,10 @@ interface PaperDao {
 
     @Query("SELECT * FROM papers WHERE source = 'ARXIV' ORDER BY publishedAt DESC LIMIT 200")
     fun subscriptionFeed(): Flow<List<PaperEntity>>
+
+    /** 「全部」流：arXiv AI 类目最新提交（国内可直连的主信息源）。 */
+    @Query("SELECT * FROM papers WHERE source = 'ARXIV_ALL' ORDER BY publishedAt DESC LIMIT 150")
+    fun allFeed(): Flow<List<PaperEntity>>
 
     @Query("SELECT MAX(fetchedAt) FROM papers WHERE source = :source")
     fun lastFetchedAt(source: String): Flow<Long?>
