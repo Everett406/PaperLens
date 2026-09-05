@@ -10,6 +10,8 @@ on:
     - cron: '0 */6 * * *'   # 每 6 小时（UTC 0/6/12/18 点；GitHub 定时器可能有分钟级延迟）
   workflow_dispatch:          # 支持手动触发
   push:
+    branches:
+      - main                  # 仅 main 分支（发版 tag 不触发，避免与 main 运行并发竞争）
     paths:
       - '.github/workflows/feed-mirror.yml'   # 工作流本身变更时立即跑一次
 
@@ -103,5 +105,7 @@ jobs:
             echo "feed unchanged, skip commit"
           else
             git commit -m "chore: refresh arXiv mirror feed (auto)"
+            # 并发防护：两次触发同时跑时，先变基到最新 main 再推
+            git pull --rebase origin main
             git push origin HEAD:main
           fi
