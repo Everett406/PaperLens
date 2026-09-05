@@ -1,6 +1,5 @@
 package com.paperlens.app.ui.components
 
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Path
@@ -12,7 +11,6 @@ import androidx.compose.ui.unit.dp
 import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.pow
-import kotlin.math.sign
 import kotlin.math.sin
 
 /** 圆角档位（规格第五节）：大卡片 24dp，小组件 16dp。 */
@@ -46,45 +44,49 @@ class SuperellipseShape(
             .coerceAtMost(min(size.width, size.height) / 2f)
         if (r <= 0f) return Outline.Rectangle(size.let { androidx.compose.ui.geometry.Rect(0f, 0f, it.width, it.height) })
 
+        val w = size.width
+        val h = size.height
         val path = Path()
-        val steps = 16
+        val steps = 24
         val n2 = 2f / exponent
+        val halfPi = (Math.PI / 2)
 
-        fun cornerPoint(cx: Float, cy: Float, sx: Float, sy: Float, t: Float): Offset {
-            // t ∈ [0,1] 扫过该象限
-            val theta = (t / steps) * (Math.PI / 2)
-            val c = cos(theta).toFloat()
-            val s = sin(theta).toFloat()
-            val x = r * sign(c) * c.abs().pow(n2)
-            val y = r * sign(s) * s.abs().pow(n2)
-            return Offset(cx + sx * x, cy + sy * y)
-        }
+        /** sin^(2/n)：0 → 1，先快后慢 */
+        fun easeIn(theta: Double): Float = sin(theta).toFloat().pow(n2)
+        /** cos^(2/n)：1 → 0，先慢后快 */
+        fun easeOut(theta: Double): Float = cos(theta).toFloat().pow(n2)
 
-        // 顺时针：右上 → 右下 → 左下 → 左上
+        // 顶边
         path.moveTo(r, 0f)
-        path.lineTo(size.width - r, 0f)
-        repeat(steps + 1) { t ->
-            val p = cornerPoint(size.width - r, r, 1f, 1f, t.toFloat())
-            path.lineTo(p.x, p.y)
+        path.lineTo(w - r, 0f)
+        // 右上角：圆心 (w-r, r)，从切点 (w-r, 0) 扫到切点 (w, r)，弧向外凸
+        for (i in 1..steps) {
+            val t = i * halfPi / steps
+            path.lineTo(w - r + r * easeIn(t), r - r * easeOut(t))
         }
-        path.lineTo(size.width, size.height - r)
-        repeat(steps + 1) { t ->
-            val p = cornerPoint(size.width - r, size.height - r, 1f, -1f, t.toFloat())
-            path.lineTo(p.x, p.y)
+        // 右边
+        path.lineTo(w, h - r)
+        // 右下角：圆心 (w-r, h-r)，从 (w, h-r) 扫到 (w-r, h)
+        for (i in 1..steps) {
+            val t = i * halfPi / steps
+            path.lineTo(w - r + r * easeOut(t), h - r + r * easeIn(t))
         }
-        path.lineTo(r, size.height)
-        repeat(steps + 1) { t ->
-            val p = cornerPoint(r, size.height - r, -1f, -1f, t.toFloat())
-            path.lineTo(p.x, p.y)
+        // 底边
+        path.lineTo(r, h)
+        // 左下角：圆心 (r, h-r)，从 (r, h) 扫到 (0, h-r)
+        for (i in 1..steps) {
+            val t = i * halfPi / steps
+            path.lineTo(r - r * easeIn(t), h - r + r * easeOut(t))
         }
+        // 左边
         path.lineTo(0f, r)
-        repeat(steps + 1) { t ->
-            val p = cornerPoint(r, r, -1f, 1f, t.toFloat())
-            path.lineTo(p.x, p.y)
+        // 左上角：圆心 (r, r)，从 (0, r) 扫到 (r, 0)
+        for (i in 1..steps) {
+            val t = i * halfPi / steps
+            path.lineTo(r - r * easeOut(t), r - r * easeIn(t))
         }
         path.close()
+        // 路径严格凸（超椭圆圆角矩形），RenderNode 可用凸路径做抗锯齿裁剪
         return Outline.Generic(path)
     }
-
-    private fun Float.abs(): Float = kotlin.math.abs(this)
 }
