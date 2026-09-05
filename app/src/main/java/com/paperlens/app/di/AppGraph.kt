@@ -5,6 +5,8 @@ import com.paperlens.app.ai.AiClient
 import com.paperlens.app.data.db.AppDatabase
 import com.paperlens.app.data.prefs.SettingsStore
 import com.paperlens.app.data.remote.ArxivApi
+import com.paperlens.app.data.remote.FeedMirrorClient
+import com.paperlens.app.data.remote.NetDiag
 import com.paperlens.app.data.repo.AiRepository
 import com.paperlens.app.data.repo.PaperRepository
 import com.paperlens.app.data.repo.SearchRepository
@@ -58,12 +60,18 @@ class AppGraph(context: Context) {
 
     val arxivApi: ArxivApi = arxivRetrofit.create(ArxivApi::class.java)
 
+    /** 网络诊断：数据渠道每次失败的原因归类 + 落盘，版本页可查看/复制。 */
+    val netDiag: NetDiag = NetDiag(java.io.File(context.filesDir, "diag"))
+
+    /** GitHub 仓库镜像源：arXiv 直连失败时的「全部」流兜底（复用 arXiv 超时策略）。 */
+    val feedMirrorClient: FeedMirrorClient = FeedMirrorClient(arxivOkHttpClient, json)
+
     val database: AppDatabase = AppDatabase.build(context)
     val settingsStore: SettingsStore = SettingsStore(context)
     val aiClient: AiClient = AiClient(aiOkHttpClient, json)
 
     val paperRepository: PaperRepository by lazy {
-        PaperRepository(arxivApi, database)
+        PaperRepository(arxivApi, feedMirrorClient, netDiag, database)
     }
     val shelfRepository: ShelfRepository by lazy { ShelfRepository(database) }
     val subscriptionRepository: SubscriptionRepository by lazy { SubscriptionRepository(database) }

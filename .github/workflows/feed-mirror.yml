@@ -1,0 +1,107 @@
+name: Feed Mirror
+
+# arXiv 镜像源：定时把 arXiv AI 类目最新论文抓成 feed/all.json 提交回仓库。
+# App 在 export.arxiv.org 直连失败（国内网络对康奈尔自托管服务器不稳定）时，
+# 会降级拉取 api.github.com 上的这份缓存 —— GitHub 对用户网络已证实可达。
+# 数据与 App 内「全部」流同参数：AI 七类目、按提交时间倒序、前 100 篇。
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'   # 每 6 小时（UTC 0/6/12/18 点；GitHub 定时器可能有分钟级延迟）
+  workflow_dispatch:          # 支持手动触发
+  push:
+    paths:
+      - '.github/workflows/feed-mirror.yml'   # 工作流本身变更时立即跑一次
+
+permissions:
+  contents: write             # 需要把 feed/all.json 提交回仓库
+
+concurrency:
+  group: feed-mirror
+  cancel-in-progress: false   # 不取消进行中的同步，避免文件写坏
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch arXiv and build feed/all.json
+        run: |
+          python3 << 'PYEOF'
+          import json, time, urllib.request, urllib.parse, xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          QUERY = "(cat:cs.AI OR cat:cs.CL OR cat:cs.CV OR cat:cs.LG OR cat:cs.RO OR cat:cs.MA OR cat:stat.ML)"
+          url = (
+              "https://export.arxiv.org/api/query?search_query="
+              + urllib.parse.quote(QUERY)
+              + "&start=0&max_results=100&sortBy=submittedDate&sortOrder=descending"
+          )
+
+          xml_text = None
+          for attempt in range(3):
+              try:
+                  req = urllib.request.Request(url, headers={"User-Agent": "PaperLensFeedMirror/1.0"})
+                  with urllib.request.urlopen(req, timeout=60) as resp:
+                      xml_text = resp.read().decode("utf-8", errors="replace")
+                  break
+              except Exception as e:
+                  print(f"attempt {attempt+1} failed: {e}")
+                  time.sleep(10)
+          if not xml_text:
+              raise SystemExit("arXiv fetch failed after retries")
+
+          ns = "{http://www.w3.org/2005/Atom}"
+          root = ET.fromstring(xml_text)
+          papers = []
+          for entry in root.findall(f"{ns}entry"):
+              def text(path, default=""):
+                  node = entry.find(path)
+                  return " ".join((node.text or "").split()) if node is not None else default
+              raw_id = text(f"{ns}id")
+              arxiv_id = raw_id.rstrip("/").split("/")[-1]
+              # 去掉版本号 2509.01234v2 -> 2509.01234
+              if "v" in arxiv_id and arxiv_id.split("v")[-1].isdigit():
+                  arxiv_id = arxiv_id.rsplit("v", 1)[0]
+              authors = [
+                  " ".join((a.find(f"{ns}name").text or "").split())
+                  for a in entry.findall(f"{ns}author")
+                  if a.find(f"{ns}name") is not None and (a.find(f"{ns}name").text or "").strip()
+              ]
+              published = text(f"{ns}published")
+              try:
+                  pub_ms = int(time.mktime(time.strptime(published, "%Y-%m-%dT%H:%M:%SZ"))) * 1000
+              except Exception:
+                  pub_ms = int(time.time() * 1000)
+              if not arxiv_id:
+                  continue
+              papers.append({
+                  "arxivId": arxiv_id,
+                  "title": text(f"{ns}title"),
+                  "authors": authors,
+                  "abstract": text(f"{ns}summary"),
+                  "publishedAt": pub_ms,
+                  "paperUrl": f"https://arxiv.org/abs/{arxiv_id}",
+              })
+
+          papers.sort(key=lambda p: p["publishedAt"], reverse=True)
+          payload = {"generatedAt": int(time.time() * 1000), "papers": papers}
+          out = Path("feed/all.json")
+          out.parent.mkdir(parents=True, exist_ok=True)
+          out.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+          print(f"wrote {len(papers)} papers -> {out}")
+          PYEOF
+
+      - name: Commit feed if changed
+        run: |
+          git config user.name "paperlens-bot"
+          git config user.email "paperlens-bot@users.noreply.github.com"
+          git add feed/all.json
+          if git diff --cached --quiet; then
+            echo "feed unchanged, skip commit"
+          else
+            git commit -m "chore: refresh arXiv mirror feed (auto)"
+            git push origin HEAD:main
+          fi

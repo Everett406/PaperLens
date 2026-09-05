@@ -200,15 +200,25 @@ fun TodayScreen(
     }
 }
 
-/** 空态文案：按板块 + 数据态 + 网络态给出诚实、可行动的提示。 */
+/** 空态文案：按板块 + 数据态 + 网络态给出诚实、可行动的提示（v1.4 附带具体原因）。 */
 private fun emptyText(feed: TodayFeed, ui: TodayViewModel.UiState): Pair<String, String> = when (feed) {
     TodayFeed.ALL ->
-        if (ui.allError) "arXiv 暂时连不上" to "检查网络后下拉重试；arXiv 国内一般可直连"
-        else "还没有内容" to "下拉刷新试试"
+        if (ui.allError) {
+            "arXiv 暂时连不上" to
+                buildString {
+                    append("检查网络后下拉重试；已自动尝试 GitHub 镜像仍未成功")
+                    ui.allReason?.let { append("。原因：$it") }
+                }
+        } else "还没有内容" to "下拉刷新试试"
     TodayFeed.SUBSCRIPTIONS ->
         if (!ui.hasKeywords) "还没有订阅关键词" to "去「我的 → 关键词订阅」添加你感兴趣的方向"
-        else if (ui.subscriptionsError) "订阅刷新失败" to "arXiv 暂时连不上，检查网络后下拉重试"
-        else "还没抓到相关论文" to "已订阅 ${ui.keywordsCount} 个关键词，下拉刷新试试，或稍后再来看看"
+        else if (ui.subscriptionsError) {
+            "订阅刷新失败" to
+                buildString {
+                    append("arXiv 暂时连不上，检查网络后下拉重试")
+                    ui.subscriptionsReason?.let { append("。原因：$it") }
+                }
+        } else "还没抓到相关论文" to "已订阅 ${ui.keywordsCount} 个关键词，下拉刷新试试，或稍后再来看看"
 }
 
 /** 顶栏高度（状态栏 + 内容），Pager 顶部避让。 */

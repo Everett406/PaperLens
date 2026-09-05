@@ -14,8 +14,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /**
- * 今日页两种信息流（v1.3 渠道收敛，精选/HF 移除）：
- * ALL = arXiv AI 类目最新（国内可直连，冷启动就有内容）；
+ * 今日页两种信息流（v1.3 渠道收敛，精选/HF 移除；v1.4 空态携带失败原因）：
+ * ALL = arXiv AI 类目最新（直连失败自动降级 GitHub 镜像）；
  * SUBSCRIPTIONS = 关键词订阅的 arXiv 合并。
  */
 enum class TodayFeed(val label: String, val origin: String) {
@@ -33,9 +33,11 @@ class TodayViewModel(private val graph: AppGraph) : ViewModel() {
         val refreshing: Boolean = false,
         val hasKeywords: Boolean = false,
         val keywordsCount: Int = 0,
-        // 各信息流最近一次刷新是否因网络失败（用于空态时给出诚实文案）
+        // 各信息流最近一次刷新失败时的一句话原因（用于空态时给出诚实文案）
         val allError: Boolean = false,
+        val allReason: String? = null,
         val subscriptionsError: Boolean = false,
+        val subscriptionsReason: String? = null,
     ) {
         val currentList: List<Paper>
             get() = if (feed == TodayFeed.ALL) all else subscriptions
@@ -111,8 +113,13 @@ class TodayViewModel(private val graph: AppGraph) : ViewModel() {
         viewModelScope.launch {
             if (force) _ui.update { it.copy(refreshing = true) }
             try {
-                val ok = graph.paperRepository.refreshAllFeed(force)
-                if (!ok) _ui.update { it.copy(allError = true) }
+                val result = graph.paperRepository.refreshAllFeed(force)
+                _ui.update {
+                    it.copy(
+                        allError = !result.ok,
+                        allReason = if (result.ok) null else result.reason,
+                    )
+                }
             } finally {
                 if (force) _ui.update { it.copy(refreshing = false) }
             }
@@ -123,8 +130,13 @@ class TodayViewModel(private val graph: AppGraph) : ViewModel() {
         viewModelScope.launch {
             if (force) _ui.update { it.copy(refreshing = true) }
             try {
-                val ok = graph.paperRepository.refreshSubscriptions(force)
-                _ui.update { it.copy(subscriptionsError = !ok) }
+                val result = graph.paperRepository.refreshSubscriptions(force)
+                _ui.update {
+                    it.copy(
+                        subscriptionsError = !result.ok,
+                        subscriptionsReason = if (result.ok) null else result.reason,
+                    )
+                }
             } finally {
                 if (force) _ui.update { it.copy(refreshing = false) }
             }

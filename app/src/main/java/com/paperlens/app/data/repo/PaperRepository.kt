@@ -6,6 +6,8 @@ import com.paperlens.app.data.db.toDomain
 import com.paperlens.app.data.db.toEntity
 import com.paperlens.app.data.remote.ArxivApi
 import com.paperlens.app.data.remote.ArxivAtomParser
+import com.paperlens.app.data.remote.FeedMirrorClient
+import com.paperlens.app.data.remote.NetDiag
 import com.paperlens.app.domain.Paper
 import com.paperlens.app.domain.PaperSource
 import kotlinx.coroutines.CancellationException
@@ -21,23 +23,27 @@ import kotlinx.coroutines.withContext
 /**
  * 论文仓：负责「今日」两个信息流的抓取/缓存/合并与 arXiv 搜索。
  *
- * v1.3 渠道收敛（精选/HF 移除）：
- * - 全部：arXiv AI 类目最新提交（cs.AI/CL/CV/LG/RO/MA + stat.ML，国内可直连，
- *   冷启动就能出内容的主信息源）；缓存 1 小时；
- * - 订阅：所有启用关键词的 arXiv 最新结果，逐关键词抓取、按 arxiv_id 去重（主键天然去重）、
- *   按发布时间排序；缓存 30 分钟内不重复拉；
- * - 刷新函数返回 Boolean（本次是否至少部分成功），UI 据此展示诚实错误态。
+ * v1.4 渠道纵深（国内可达性）：
+ * - 全部流双通道：export.arxiv.org 直连优先（失败原因记入 [NetDiag]），
+ *   失败或返回空集时自动降级 GitHub 仓库镜像 feed/all.json（Feed Mirror 工作流
+ *   每 6h 与 arXiv 同参数同步；用户网络到 GitHub 已证实可达）；
+ * - 订阅/搜索保持 arXiv 直连（任意关键词无法预缓存），失败给诚实原因；
+ * - 刷新函数返回 [RefreshResult]（成功与否 + 一句话原因），UI 据此展示。
  *
- * 解析与响应读取统一在 Dispatchers.Default 上执行（XmlPullParser 对上百条目有一定耗时，
- * 不占主线程）；arXiv 响应经 ResponseBody 原样取出，绝不经过 JSON 转换层。
+ * 解析与响应读取统一在 Dispatchers.Default 上执行；arXiv 响应经 ResponseBody
+ * 原样取出，绝不经过 JSON 转换层；镜像 JSON 走 kotlinx.serialization。
  *
- * arXiv 速率约束：全局串行（Mutex），相邻请求间隔 ≥3s；单次失败不重试
- * （下轮 TTL/手动下拉再试），避免搜索被批量订阅拉取堵在队尾几分钟。
+ * arXiv 速率约束：全局串行（Mutex），相邻请求间隔 ≥3s；单次失败不自动重试
+ * （全部流的重试由镜像通道承担），避免搜索被批量订阅拉取堵在队尾。
  */
 class PaperRepository(
     private val arxivApi: ArxivApi,
+    private val mirrorClient: FeedMirrorClient,
+    private val netDiag: NetDiag,
     private val db: AppDatabase,
 ) {
+
+    data class RefreshResult(val ok: Boolean, val reason: String? = null)
 
     private val arxivGate = Mutex()
 
@@ -50,36 +56,59 @@ class PaperRepository(
     val subscriptionFeed: Flow<List<Paper>> =
         db.paperDao().subscriptionFeed().map { list -> list.map(PaperEntity::toDomain) }
 
-    /** —— 全部（arXiv AI 类目最新） —— */
+    /** —— 全部（arXiv 直连 → GitHub 镜像兜底） —— */
 
-    /** 返回 false 表示本次刷新因网络失败（缓存仍可用）。 */
-    suspend fun refreshAllFeed(force: Boolean): Boolean {
+    suspend fun refreshAllFeed(force: Boolean): RefreshResult {
         if (!force) {
             val last = firstOrNull(db.paperDao().lastFetchedAt(PaperSource.ARXIV_ALL.name)) ?: 0L
-            if (System.currentTimeMillis() - last < ALL_FEED_TTL_MS) return true
+            if (System.currentTimeMillis() - last < ALL_FEED_TTL_MS) return RefreshResult(true)
         }
-        return try {
+        // 1) arXiv 直连
+        try {
             val entries = arxivQueryParsed(AI_CATEGORIES_QUERY, maxResults = 100)
-            storeArxivEntries(entries, source = PaperSource.ARXIV_ALL, keyword = null)
-            true
+            if (entries.isNotEmpty()) {
+                storeArxivEntries(entries, source = PaperSource.ARXIV_ALL, keyword = null)
+                return RefreshResult(true)
+            }
+            netDiag.record("全部/arXiv", ARXIV_HOST, "返回 0 篇（响应异常），转镜像通道")
         } catch (ce: CancellationException) {
             throw ce
         } catch (e: Exception) {
-            false
+            netDiag.record("全部/arXiv", ARXIV_HOST, e)
+        }
+        // 2) GitHub 镜像兜底
+        return refreshAllFeedFromMirror()
+    }
+
+    private suspend fun refreshAllFeedFromMirror(): RefreshResult {
+        return try {
+            val feed = mirrorClient.fetchAllFeed()
+            if (feed.papers.isEmpty()) {
+                netDiag.record("全部/镜像", MIRROR_HOST, "镜像返回空数据")
+                RefreshResult(false, "镜像源也没有可用数据")
+            } else {
+                storeMirrorPapers(feed.papers)
+                RefreshResult(true)
+            }
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (e: Exception) {
+            netDiag.record("全部/镜像", MIRROR_HOST, e)
+            RefreshResult(false, netDiag.reason(e))
         }
     }
 
     /** —— 订阅 —— */
 
-    /** 返回 false 表示所有启用关键词全部拉取失败。 */
-    suspend fun refreshSubscriptions(force: Boolean): Boolean {
+    suspend fun refreshSubscriptions(force: Boolean): RefreshResult {
         if (!force) {
             val last = firstOrNull(db.paperDao().lastFetchedAt(PaperSource.ARXIV.name)) ?: 0L
-            if (System.currentTimeMillis() - last < SUBSCRIPTION_TTL_MS) return true
+            if (System.currentTimeMillis() - last < SUBSCRIPTION_TTL_MS) return RefreshResult(true)
         }
         val keywords = db.subscriptionDao().enabledKeywords()
-        if (keywords.isEmpty()) return true
+        if (keywords.isEmpty()) return RefreshResult(true)
         var succeeded = 0
+        var firstReason: String? = null
         keywords.forEach { keyword ->
             try {
                 val entries = arxivQueryParsed("all:\"$keyword\"", maxResults = 50)
@@ -88,10 +117,12 @@ class PaperRepository(
             } catch (ce: CancellationException) {
                 throw ce
             } catch (e: Exception) {
-                // 单个关键词失败不影响其余关键词
+                // 单个关键词失败不影响其余关键词；原因记诊断，最终上屏
+                netDiag.record("订阅/$keyword", ARXIV_HOST, e)
+                if (firstReason == null) firstReason = netDiag.reason(e)
             }
         }
-        return succeeded > 0
+        return if (succeeded > 0) RefreshResult(true) else RefreshResult(false, firstReason)
     }
 
     /** —— 搜索 —— */
@@ -99,21 +130,28 @@ class PaperRepository(
     suspend fun searchArxiv(query: String, maxResults: Int = 25): List<Paper> {
         val trimmed = query.trim()
         require(trimmed.isNotEmpty()) { "empty query" }
-        val entries = arxivQueryParsed("(ti:\"$trimmed\" OR abs:\"$trimmed\")", maxResults = maxResults)
-        storeArxivEntries(entries, source = PaperSource.SEARCH, keyword = null)
-        return entries.map { e ->
-            Paper(
-                arxivId = e.arxivId,
-                title = e.title,
-                authors = e.authors,
-                abstract = e.summary,
-                upvotes = 0,
-                source = PaperSource.SEARCH,
-                sourceKeyword = null,
-                publishedAt = e.publishedAt,
-                fetchedAt = System.currentTimeMillis(),
-                paperUrl = e.paperUrl,
-            )
+        try {
+            val entries = arxivQueryParsed("(ti:\"$trimmed\" OR abs:\"$trimmed\")", maxResults = maxResults)
+            storeArxivEntries(entries, source = PaperSource.SEARCH, keyword = null)
+            return entries.map { e ->
+                Paper(
+                    arxivId = e.arxivId,
+                    title = e.title,
+                    authors = e.authors,
+                    abstract = e.summary,
+                    upvotes = 0,
+                    source = PaperSource.SEARCH,
+                    sourceKeyword = null,
+                    publishedAt = e.publishedAt,
+                    fetchedAt = System.currentTimeMillis(),
+                    paperUrl = e.paperUrl,
+                )
+            }
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (e: Exception) {
+            netDiag.record("搜索/$trimmed", ARXIV_HOST, e)
+            throw e
         }
     }
 
@@ -171,10 +209,30 @@ class PaperRepository(
         db.paperDao().upsertAll(entities)
     }
 
+    /** 镜像 JSON → 论文实体（来源仍记 ARXIV_ALL，用户无感知差别）。 */
+    private suspend fun storeMirrorPapers(papers: List<FeedMirrorClient.MirrorPaper>) {
+        val now = System.currentTimeMillis()
+        val entities = papers.map { p ->
+            PaperEntity(
+                arxivId = p.arxivId,
+                title = p.title,
+                authors = p.authors,
+                abstractText = p.abstract,
+                upvotes = 0,
+                source = PaperSource.ARXIV_ALL.name,
+                sourceKeyword = null,
+                publishedAt = p.publishedAt.takeIf { it > 0 } ?: now,
+                fetchedAt = now,
+                paperUrl = p.paperUrl ?: "https://arxiv.org/abs/${p.arxivId}",
+            )
+        }
+        db.paperDao().upsertAll(entities)
+    }
+
     /**
      * arXiv 调用闸门：全局串行 + 相邻请求 ≥3s。
      * 不做自动重试：重试会让批量订阅占用闸门的时间翻倍，搜索会被堵在队尾；
-     * 失败交给下轮 TTL 刷新或用户手动下拉。
+     * 失败交给镜像通道（全部流）或下轮 TTL/手动下拉。
      */
     private suspend fun <T> arxivRateLimited(block: suspend () -> T): T = arxivGate.withLock {
         val wait = lastArxivCallAt + ARXIV_MIN_INTERVAL_MS - System.currentTimeMillis()
@@ -194,8 +252,11 @@ class PaperRepository(
         private const val ALL_FEED_TTL_MS = 60 * 60 * 1000L
         private const val ARXIV_MIN_INTERVAL_MS = 3_000L
 
-        /** 「全部」流的类目：AI 主战场（HF Daily Papers 的收录范围基本是其子集）。 */
-        private const val AI_CATEGORIES_QUERY =
+        private const val ARXIV_HOST = "export.arxiv.org"
+        private const val MIRROR_HOST = "api.github.com"
+
+        /** 「全部」流的类目：AI 主战场（Feed Mirror 工作流使用同一查询）。 */
+        const val AI_CATEGORIES_QUERY =
             "(cat:cs.AI OR cat:cs.CL OR cat:cs.CV OR cat:cs.LG OR cat:cs.RO OR cat:cs.MA OR cat:stat.ML)"
     }
 }

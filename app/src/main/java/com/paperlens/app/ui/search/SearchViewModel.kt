@@ -78,7 +78,9 @@ class SearchViewModel(private val graph: AppGraph) : ViewModel() {
                     } catch (ce: CancellationException) {
                         throw ce   // collectLatest 因新输入取消旧任务，属于正常流程
                     } catch (e: Exception) {
-                        fallbackToCache(q, "检索失败：arXiv 暂时连不上，先看看本地缓存")
+                        // v1.4：原因从 NetDiag 归类取，不再是笼统的「连不上」
+                        val reason = graph.netDiag.lastReason ?: "arXiv 暂时连不上"
+                        fallbackToCache(q, "检索失败：$reason，先看看本地缓存")
                     }
                 }
         }
