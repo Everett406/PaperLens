@@ -13,9 +13,11 @@ object Routes {
     const val SEARCH = "search"
     const val VERSION = "version"
     const val AI_SETTINGS = "ai_settings"
-    const val DETAIL = "detail/{arxivId}"
 
-    fun detail(arxivId: String) = "detail/$arxivId"
+    /** origin：哪个列表打开的详情（all/sub/search/shelf），用于唯一化 sharedBounds 键。 */
+    const val DETAIL = "detail/{arxivId}?origin={origin}"
+
+    fun detail(arxivId: String, origin: String = "all") = "detail/$arxivId?origin=$origin"
 
     /** encoded: arxivId 形如 2401.12345，无特殊字符，直接拼即可 */
     val TOP_TABS = listOf(TODAY, SHELF, MINE)

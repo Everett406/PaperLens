@@ -42,8 +42,6 @@ data class AppSettings(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     /** 动态取色种子色（ARGB）。 */
     val seedColor: Int = DEFAULT_SEED,
-    /** HuggingFace 镜像站（国内直连 hf-mirror.com；留空回落默认）。 */
-    val hfMirror: String = DEFAULT_HF_MIRROR,
 ) {
     val aiConfigured: Boolean
         get() = aiBaseUrl.isNotBlank() && aiApiKey.isNotBlank() && aiModel.isNotBlank()
@@ -54,8 +52,6 @@ data class AppSettings(
 
     companion object {
         const val DEFAULT_SEED: Int = 0xFF3D7EFF.toInt()
-        const val DEFAULT_HF_MIRROR: String = "https://hf-mirror.com"
-        const val DEFAULT_HF_MIRROR_URL_OFFICIAL: String = "https://huggingface.co"
     }
 }
 
@@ -69,7 +65,6 @@ class SettingsStore(private val context: Context) {
         val aiProtocol = stringPreferencesKey("ai_protocol")
         val themeMode = stringPreferencesKey("theme_mode")
         val seedColor = intPreferencesKey("seed_color")
-        val hfMirror = stringPreferencesKey("hf_mirror")
     }
 
     val settings: Flow<AppSettings> = context.dataStore.data
@@ -83,7 +78,6 @@ class SettingsStore(private val context: Context) {
                 themeMode = runCatching { ThemeMode.valueOf(p[Keys.themeMode] ?: "") }
                     .getOrDefault(ThemeMode.SYSTEM),
                 seedColor = p[Keys.seedColor] ?: AppSettings.DEFAULT_SEED,
-                hfMirror = p[Keys.hfMirror] ?: AppSettings.DEFAULT_HF_MIRROR,
             )
         }
 
@@ -101,10 +95,6 @@ class SettingsStore(private val context: Context) {
         }
     }
 
-    suspend fun setHfMirror(url: String) {
-        context.dataStore.edit { it[Keys.hfMirror] = normalizeMirror(url) }
-    }
-
     suspend fun setThemeMode(mode: ThemeMode) {
         context.dataStore.edit { it[Keys.themeMode] = mode.name }
     }
@@ -113,13 +103,5 @@ class SettingsStore(private val context: Context) {
         context.dataStore.edit { it[Keys.seedColor] = color }
     }
 
-    companion object {
-        /** 镜像归一化：空 → 默认镜像；无 scheme → 补 https://；去掉尾部斜杠。 */
-        fun normalizeMirror(raw: String): String {
-            var s = raw.trim().trimEnd('/')
-            if (s.isEmpty()) return AppSettings.DEFAULT_HF_MIRROR
-            if (!s.startsWith("http://") && !s.startsWith("https://")) s = "https://$s"
-            return s
-        }
-    }
+    companion object
 }

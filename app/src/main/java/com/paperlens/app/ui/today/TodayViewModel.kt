@@ -14,11 +14,14 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /**
- * 今日页三种信息流（v1.2 三板块）：
+ * 今日页两种信息流（v1.3 渠道收敛，精选/HF 移除）：
  * ALL = arXiv AI 类目最新（国内可直连，冷启动就有内容）；
- * SUBSCRIPTIONS = 关键词订阅的 arXiv 合并；FEATURED = HF 当日榜（可达性受网络限制）。
+ * SUBSCRIPTIONS = 关键词订阅的 arXiv 合并。
  */
-enum class TodayFeed(val label: String) { ALL("全部"), SUBSCRIPTIONS("订阅"), FEATURED("精选") }
+enum class TodayFeed(val label: String, val origin: String) {
+    ALL("全部", "all"),
+    SUBSCRIPTIONS("订阅", "sub"),
+}
 
 class TodayViewModel(private val graph: AppGraph) : ViewModel() {
 
@@ -26,7 +29,6 @@ class TodayViewModel(private val graph: AppGraph) : ViewModel() {
         val feed: TodayFeed = TodayFeed.ALL,
         val all: List<Paper> = emptyList(),
         val subscriptions: List<Paper> = emptyList(),
-        val featured: List<Paper> = emptyList(),
         val savedIds: Set<String> = emptySet(),
         val refreshing: Boolean = false,
         val hasKeywords: Boolean = false,
@@ -34,14 +36,9 @@ class TodayViewModel(private val graph: AppGraph) : ViewModel() {
         // 各信息流最近一次刷新是否因网络失败（用于空态时给出诚实文案）
         val allError: Boolean = false,
         val subscriptionsError: Boolean = false,
-        val featuredError: Boolean = false,
     ) {
         val currentList: List<Paper>
-            get() = when (feed) {
-                TodayFeed.ALL -> all
-                TodayFeed.SUBSCRIPTIONS -> subscriptions
-                TodayFeed.FEATURED -> featured
-            }
+            get() = if (feed == TodayFeed.ALL) all else subscriptions
     }
 
     private val _ui = MutableStateFlow(UiState())
@@ -66,11 +63,6 @@ class TodayViewModel(private val graph: AppGraph) : ViewModel() {
             }
         }
         viewModelScope.launch {
-            graph.paperRepository.featuredFeed.collect { list ->
-                _ui.update { it.copy(featured = list) }
-            }
-        }
-        viewModelScope.launch {
             graph.shelfRepository.observeSavedIds().collect { ids ->
                 _ui.update { it.copy(savedIds = ids) }
             }
@@ -89,10 +81,9 @@ class TodayViewModel(private val graph: AppGraph) : ViewModel() {
                 if (changed && enabled.isNotEmpty()) refreshSubscriptions(force = true)
             }
         }
-        // 冷启动：缓存过期则后台刷新（全部 1h / 订阅 30min / 精选 6h，仓库内控）
+        // 冷启动：缓存过期则后台刷新（全部 1h / 订阅 30min，仓库内控）
         refreshAllFeed(force = false)
         refreshSubscriptions(force = false)
-        refreshFeatured(force = false)
     }
 
     fun setFeed(feed: TodayFeed) {
@@ -103,7 +94,6 @@ class TodayViewModel(private val graph: AppGraph) : ViewModel() {
         when (_ui.value.feed) {
             TodayFeed.ALL -> refreshAllFeed(force = true)
             TodayFeed.SUBSCRIPTIONS -> refreshSubscriptions(force = true)
-            TodayFeed.FEATURED -> refreshFeatured(force = true)
         }
     }
 
@@ -135,18 +125,6 @@ class TodayViewModel(private val graph: AppGraph) : ViewModel() {
             try {
                 val ok = graph.paperRepository.refreshSubscriptions(force)
                 _ui.update { it.copy(subscriptionsError = !ok) }
-            } finally {
-                if (force) _ui.update { it.copy(refreshing = false) }
-            }
-        }
-    }
-
-    private fun refreshFeatured(force: Boolean) {
-        viewModelScope.launch {
-            if (force) _ui.update { it.copy(refreshing = true) }
-            try {
-                val ok = graph.paperRepository.refreshFeatured(force)
-                if (!ok) _ui.update { it.copy(featuredError = true) }
             } finally {
                 if (force) _ui.update { it.copy(refreshing = false) }
             }

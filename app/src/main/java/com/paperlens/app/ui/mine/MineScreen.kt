@@ -70,7 +70,7 @@ private val SeedColors = listOf(
 )
 
 /**
- * 「我的」页（规格二 3）：AI 服务入口 / 关键词订阅 / 外观 / 网络 / 数据。
+ * 「我的」页（规格二 3）：AI 服务入口 / 关键词订阅 / 外观 / 数据。
  * v1.1 起 AI 配置独立到 [AiSettingsScreen]，此处仅展示状态入口。
  */
 @Composable
@@ -86,8 +86,6 @@ fun MineScreen(
     val subs by vm.subscriptions.collectAsStateWithLifecycle()
 
     var showClearDialog by rememberSaveable { mutableStateOf(false) }
-    var showMirrorDialog by rememberSaveable { mutableStateOf(false) }
-    var mirrorDraft by rememberSaveable { mutableStateOf(AppSettings.DEFAULT_HF_MIRROR) }
     var newKeyword by remember { mutableStateOf("") }
 
     val colors = MiuixTheme.colorScheme
@@ -115,24 +113,6 @@ fun MineScreen(
                 else
                     "支持 OpenAI 兼容 / Anthropic / Gemini 三种协议，点按配置",
                 onClick = onOpenAiSettings,
-            )
-        }
-
-        SectionCard(title = "网络") {
-            SettingRow(
-                title = "HuggingFace 镜像站",
-                subtitle = "${ui.settings.hfMirror} · 精选榜单加速，失败自动回退官方站",
-                onClick = {
-                    mirrorDraft = ui.settings.hfMirror
-                    showMirrorDialog = true
-                },
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = "arXiv 论文源国内可直连，无需配置；AI 接口地址在「AI 服务」中设置。",
-                fontSize = 11.5.sp,
-                lineHeight = 17.sp,
-                color = colors.onSurfaceVariantActions,
             )
         }
 
@@ -259,48 +239,6 @@ fun MineScreen(
             }
         }
         Spacer(Modifier.height(140.dp))
-    }
-
-    if (showMirrorDialog) {
-        PaperDialog(
-            visible = true,
-            title = "HuggingFace 镜像站",
-            onDismiss = { showMirrorDialog = false },
-        ) {
-            Text(
-                text = "精选榜单从镜像站拉取（国内可直连）；镜像不可用时自动回退官方站。",
-                fontSize = 12.5.sp,
-                lineHeight = 19.sp,
-                color = colors.onSurfaceVariantSummary,
-            )
-            Spacer(Modifier.height(10.dp))
-            AppTextField(
-                value = mirrorDraft,
-                onValueChange = { mirrorDraft = it },
-                placeholder = "镜像地址，如 https://hf-mirror.com",
-            )
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                SecondaryButton(
-                    text = "hf-mirror.com",
-                    onClick = { mirrorDraft = AppSettings.DEFAULT_HF_MIRROR },
-                    modifier = Modifier.weight(1f),
-                )
-                SecondaryButton(
-                    text = "官方站",
-                    onClick = { mirrorDraft = AppSettings.DEFAULT_HF_MIRROR_URL_OFFICIAL },
-                    modifier = Modifier.weight(1f),
-                )
-            }
-            Spacer(Modifier.height(12.dp))
-            PrimaryButton(
-                text = "保存",
-                onClick = {
-                    vm.setHfMirror(mirrorDraft)
-                    showMirrorDialog = false
-                },
-            )
-        }
     }
 
     if (showClearDialog) {

@@ -71,9 +71,6 @@ interface PaperDao {
         }
     }
 
-    @Query("SELECT * FROM papers WHERE source = 'HF_DAILY' ORDER BY upvotes DESC, publishedAt DESC LIMIT 120")
-    fun featuredFeed(): Flow<List<PaperEntity>>
-
     @Query("SELECT * FROM papers WHERE source = 'ARXIV' ORDER BY publishedAt DESC LIMIT 200")
     fun subscriptionFeed(): Flow<List<PaperEntity>>
 

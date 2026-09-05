@@ -279,7 +279,7 @@ fun SearchScreen(
                             onToggleSave = { vm.toggleSave(paper, saved) },
                             sharedScope = sharedScope,
                             animScope = animScope,
-                            sharedKey = "paper-${paper.arxivId}",
+                            sharedKey = "paper-search-${paper.arxivId}",
                             modifier = Modifier.animateItem(),
                         )
                     }

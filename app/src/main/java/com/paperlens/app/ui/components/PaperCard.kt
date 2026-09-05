@@ -199,7 +199,6 @@ fun PaperCard(
 fun SourceBadge(paper: Paper) {
     val colors = MiuixTheme.colorScheme
     val label = when (paper.source) {
-        PaperSource.HF_DAILY -> "HF 榜单"
         PaperSource.ARXIV_ALL -> "arXiv 最新"
         PaperSource.ARXIV -> paper.sourceKeyword?.let { "订阅 · $it" } ?: "订阅"
         PaperSource.SEARCH -> "搜索"

@@ -82,6 +82,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 fun DetailScreen(
     graph: AppGraph,
     arxivId: String,
+    origin: String,
     sharedScope: SharedTransitionScope?,
     animScope: AnimatedVisibilityScope?,
     onBack: () -> Unit,
@@ -120,7 +121,7 @@ fun DetailScreen(
                 val headerModifier = if (sharedScope != null && animScope != null) {
                     with(sharedScope) {
                         Modifier.sharedBounds(
-                            sharedContentState = rememberSharedContentState(key = "paper-$arxivId"),
+                            sharedContentState = rememberSharedContentState(key = "paper-$origin-$arxivId"),
                             animatedVisibilityScope = animScope,
                             enter = fadeIn(spring(dampingRatio = 0.9f, stiffness = Spring.StiffnessMediumLow)),
                             exit = fadeOut(spring(dampingRatio = 0.9f, stiffness = Spring.StiffnessMediumLow)),

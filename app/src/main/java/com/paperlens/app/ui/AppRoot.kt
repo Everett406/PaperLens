@@ -115,7 +115,9 @@ fun PaperLensRoot(graph: AppGraph) {
                                 sharedScope = this@SharedTransitionLayout,
                                 animScope = this,
                                 onOpenSearch = { navController.navigateSafely(Routes.SEARCH) },
-                                onOpenPaper = { id -> navController.navigateSafely(Routes.detail(id)) },
+                                onOpenPaper = { id, origin ->
+                                    navController.navigateSafely(Routes.detail(id, origin))
+                                },
                             )
                         }
                         composable(Routes.SHELF) {
@@ -123,7 +125,9 @@ fun PaperLensRoot(graph: AppGraph) {
                                 graph = graph,
                                 sharedScope = this@SharedTransitionLayout,
                                 animScope = this,
-                                onOpenPaper = { id -> navController.navigateSafely(Routes.detail(id)) },
+                                onOpenPaper = { id ->
+                                    navController.navigateSafely(Routes.detail(id, "shelf"))
+                                },
                             )
                         }
                         composable(Routes.MINE) {
@@ -164,7 +168,9 @@ fun PaperLensRoot(graph: AppGraph) {
                                 sharedScope = this@SharedTransitionLayout,
                                 animScope = this,
                                 onBack = { navController.popBackStack() },
-                                onOpenPaper = { id -> navController.navigateSafely(Routes.detail(id)) },
+                                onOpenPaper = { id ->
+                                    navController.navigateSafely(Routes.detail(id, "search"))
+                                },
                             )
                         }
                         composable(
@@ -179,9 +185,11 @@ fun PaperLensRoot(graph: AppGraph) {
                             },
                         ) { entry ->
                             val arxivId = entry.arguments?.getString("arxivId").orEmpty()
+                            val origin = entry.arguments?.getString("origin").orEmpty().ifEmpty { "all" }
                             DetailScreen(
                                 graph = graph,
                                 arxivId = arxivId,
+                                origin = origin,
                                 sharedScope = this@SharedTransitionLayout,
                                 animScope = this,
                                 onBack = { navController.popBackStack() },

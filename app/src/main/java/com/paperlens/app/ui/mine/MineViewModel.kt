@@ -17,7 +17,7 @@ import kotlinx.coroutines.launch
 
 /**
  * 「我的」页 ViewModel（v1.1 起 AI 配置独立到 AiSettingsScreen，这里保留
- * 订阅管理 / 外观 / 数据 / HF 镜像站设置）。
+ * 订阅管理 / 外观 / 数据设置）。
  */
 @OptIn(FlowPreview::class)
 class MineViewModel(private val graph: AppGraph) : ViewModel() {
@@ -39,10 +39,6 @@ class MineViewModel(private val graph: AppGraph) : ViewModel() {
                 _ui.update { it.copy(settings = s) }
             }
         }
-    }
-
-    fun setHfMirror(url: String) {
-        viewModelScope.launch { graph.settingsStore.setHfMirror(url) }
     }
 
     fun setThemeMode(mode: ThemeMode) {

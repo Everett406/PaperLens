@@ -3,13 +3,10 @@ package com.paperlens.app.ui.today
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.AnimatedVisibilityScope
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -26,14 +23,16 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -42,9 +41,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.paperlens.app.di.AppGraph
-import com.paperlens.app.domain.Paper
 import com.paperlens.app.ui.components.AcrylicSurface
-import com.paperlens.app.ui.components.Corners
 import com.paperlens.app.ui.components.EmptyState
 import com.paperlens.app.ui.components.PaperCard
 import com.paperlens.app.ui.components.SpringTabs
@@ -58,12 +55,15 @@ import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
- * 今日页（v1.2 三板块）：
+ * 今日页（v1.3 两板块）：
  * - 亚克力顶栏（三处之一）：标题 + 搜索入口，滚动列表从下方穿过被模糊；
- * - 全部|订阅|精选 SpringTabs + HorizontalPager，内容横向跟随滑入；
+ * - 全部|订阅 SpringTabs + HorizontalPager：点按 Tab 弹簧滑动高亮；
+ *   左右滑动内容页时高亮跟随（LaunchedEffect 监听 pager 落定页回写状态）；
  * - 下拉刷新（Miuix PullToRefresh）：空态也用 LazyColumn 渲染（可滚动、
  *   嵌套滚动连接可用），修复「空列表拉不动」的问题；
- * - 空态文案区分：无数据 / 网络失败 / 未配置，不再永远「还在路上」。
+ * - 空态文案区分：无数据 / 网络失败 / 未配置，不再永远「还在路上」；
+ * - 共享键带板块来源前缀（paper-all-xxx / paper-sub-xxx），杜绝同一论文在多个
+ *   列表/屏幕同时注册同一 SharedTransition key 引发的崩溃。
  */
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
@@ -72,7 +72,7 @@ fun TodayScreen(
     sharedScope: SharedTransitionScope?,
     animScope: AnimatedVisibilityScope?,
     onOpenSearch: () -> Unit,
-    onOpenPaper: (String) -> Unit,
+    onOpenPaper: (arxivId: String, origin: String) -> Unit,
 ) {
     val vm: TodayViewModel = viewModel(
         factory = viewModelFactory { initializer { TodayViewModel(graph) } },
@@ -80,6 +80,10 @@ fun TodayScreen(
     val ui by vm.ui.collectAsStateWithLifecycle()
 
     val pagerState = rememberPagerState(initialPage = ui.feed.ordinal) { TodayFeed.entries.size }
+    // 左右滑动内容页 → 高亮滑块跟随落定页（点按 Tab 时 setFeed 后再滚动，此处同值回写无副作用）
+    LaunchedEffect(pagerState.currentPage) {
+        vm.setFeed(TodayFeed.entries[pagerState.currentPage])
+    }
     val scope = rememberCoroutineScope()
     val scrollController = remember { ScrollToHideController() }
     val colors = MiuixTheme.colorScheme
@@ -140,11 +144,7 @@ fun TodayScreen(
                 .padding(top = topBarHeightPx()),
         ) { page ->
             val feed = TodayFeed.entries[page]
-            val items = when (feed) {
-                TodayFeed.ALL -> ui.all
-                TodayFeed.SUBSCRIPTIONS -> ui.subscriptions
-                TodayFeed.FEATURED -> ui.featured
-            }
+            val items = if (feed == TodayFeed.ALL) ui.all else ui.subscriptions
             // 每页独立滚动状态；仅当前可见页驱动底栏隐藏
             val listState = rememberLazyListState()
             rememberScrollToHide(
@@ -185,11 +185,11 @@ fun TodayScreen(
                             PaperCard(
                                 paper = paper,
                                 saved = paper.arxivId in ui.savedIds,
-                                onOpen = { onOpenPaper(paper.arxivId) },
+                                onOpen = { onOpenPaper(paper.arxivId, feed.origin) },
                                 onToggleSave = { vm.toggleSave(paper) },
                                 sharedScope = sharedScope,
                                 animScope = animScope,
-                                sharedKey = "paper-${paper.arxivId}",
+                                sharedKey = "paper-${feed.origin}-${paper.arxivId}",
                                 modifier = Modifier.animateItem(),
                             )
                         }
@@ -209,9 +209,6 @@ private fun emptyText(feed: TodayFeed, ui: TodayViewModel.UiState): Pair<String,
         if (!ui.hasKeywords) "还没有订阅关键词" to "去「我的 → 关键词订阅」添加你感兴趣的方向"
         else if (ui.subscriptionsError) "订阅刷新失败" to "arXiv 暂时连不上，检查网络后下拉重试"
         else "还没抓到相关论文" to "已订阅 ${ui.keywordsCount} 个关键词，下拉刷新试试，或稍后再来看看"
-    TodayFeed.FEATURED ->
-        if (ui.featuredError) "HF 精选暂时连不上" to "当前网络可能无法访问 Hugging Face；可先逛逛「全部」和「订阅」，或在「我的 → 网络」更换镜像"
-        else "今日榜单还在路上" to "下拉刷新试试，或稍后再来看看"
 }
 
 /** 顶栏高度（状态栏 + 内容），Pager 顶部避让。 */

@@ -6,10 +6,7 @@ package com.paperlens.app.domain
 
 /** 论文来源。列表角标与排序策略依赖它； papers.source 列存 [name]。 */
 enum class PaperSource(val displayName: String) {
-    /** Hugging Face Daily Papers 当日榜 */
-    HF_DAILY("HF 榜单"),
-
-    /** 「全部」流：arXiv AI 相关类目最新提交（国内可直连，今日页兜底信息源） */
+    /** 「全部」流：arXiv AI 相关类目最新提交（国内可直连，今日页主信息源） */
     ARXIV_ALL("arXiv"),
 
     /** 关键词订阅的 arXiv 最新结果 */

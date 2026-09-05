@@ -126,7 +126,7 @@ fun ShelfScreen(
                         onLongClick = { actionTarget = item },
                         sharedScope = sharedScope,
                         animScope = animScope,
-                        sharedKey = "paper-${item.paper.arxivId}",
+                        sharedKey = "paper-shelf-${item.paper.arxivId}",
                         modifier = Modifier.animateItem(),
                     )
                 }
