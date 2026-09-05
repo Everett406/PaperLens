@@ -1,6 +1,6 @@
 package com.paperlens.app.data.repo
 
-import com.paperlens.app.ai.OpenAiClient
+import com.paperlens.app.ai.AiClient
 import com.paperlens.app.ai.Prompts
 import com.paperlens.app.data.db.AiReadingEntity
 import com.paperlens.app.data.db.AppDatabase
@@ -19,7 +19,7 @@ import kotlinx.coroutines.flow.map
  * - 未配置 AI 服务时 isConfigured 为 false，UI 展示引导文案，不阻塞其他功能。
  */
 class AiRepository(
-    private val openAiClient: OpenAiClient,
+    private val aiClient: AiClient,
     private val db: AppDatabase,
     private val settingsStore: SettingsStore,
 ) {
@@ -46,7 +46,7 @@ class AiRepository(
             return Result.failure(IllegalStateException("尚未配置 AI 服务"))
         }
         return try {
-            val text = openAiClient.streamChat(
+            val text = aiClient.streamChat(
                 settings = settings,
                 systemPrompt = Prompts.system(layer),
                 userPrompt = Prompts.user(paper),

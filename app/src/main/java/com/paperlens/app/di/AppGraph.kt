@@ -1,7 +1,7 @@
 package com.paperlens.app.di
 
 import android.content.Context
-import com.paperlens.app.ai.OpenAiClient
+import com.paperlens.app.ai.AiClient
 import com.paperlens.app.data.db.AppDatabase
 import com.paperlens.app.data.prefs.SettingsStore
 import com.paperlens.app.data.remote.ArxivApi
@@ -59,13 +59,13 @@ class AppGraph(context: Context) {
 
     val database: AppDatabase = AppDatabase.build(context)
     val settingsStore: SettingsStore = SettingsStore(context)
-    val openAiClient: OpenAiClient = OpenAiClient(okHttpClient, json)
+    val aiClient: AiClient = AiClient(okHttpClient, json)
 
     val paperRepository: PaperRepository by lazy {
-        PaperRepository(hfApi, arxivApi, database)
+        PaperRepository(hfApi, arxivApi, database, settingsStore)
     }
     val shelfRepository: ShelfRepository by lazy { ShelfRepository(database) }
     val subscriptionRepository: SubscriptionRepository by lazy { SubscriptionRepository(database) }
     val searchRepository: SearchRepository by lazy { SearchRepository(database) }
-    val aiRepository: AiRepository by lazy { AiRepository(openAiClient, database, settingsStore) }
+    val aiRepository: AiRepository by lazy { AiRepository(aiClient, database, settingsStore) }
 }

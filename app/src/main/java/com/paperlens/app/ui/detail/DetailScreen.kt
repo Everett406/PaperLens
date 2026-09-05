@@ -441,7 +441,7 @@ private fun AiLayerCard(
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    text = "在「我的 → AI 服务」填入任意 OpenAI 兼容接口（如 DeepSeek、Kimi、OpenAI），即可一键把论文读成人话。",
+                    text = "到「我的 → AI 服务」配置任意 OpenAI 兼容 / Anthropic / Gemini 接口（DeepSeek、Kimi、Claude、Gemini 等），即可一键把论文读成人话。",
                     fontSize = 12.5.sp,
                     lineHeight = 20.sp,
                     color = colors.onSurfaceVariantActions,

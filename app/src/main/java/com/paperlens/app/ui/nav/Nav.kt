@@ -12,6 +12,7 @@ object Routes {
     const val MINE = "mine"
     const val SEARCH = "search"
     const val VERSION = "version"
+    const val AI_SETTINGS = "ai_settings"
     const val DETAIL = "detail/{arxivId}"
 
     fun detail(arxivId: String) = "detail/$arxivId"

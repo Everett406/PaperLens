@@ -3,8 +3,8 @@
 > 把论文读成人话 —— 一个跑在手机上的本地论文阅读 App。
 
 「纸镜」是一个无需注册、完全本地的 arXiv 论文阅读器：每天为你整理 Hugging Face
-Daily Papers 精选榜，按关键词订阅 arXiv 最新论文，并用你自己的 OpenAI 兼容接口
-把论文一键「翻译」成三層大白话 —— **故事 / 细节 / 第一性原理**。
+Daily Papers 精选榜，按关键词订阅 arXiv 最新论文，并用你自己的 AI 接口
+把论文一键「翻译」成三层大白话 —— **故事 / 细节 / 第一性原理**。
 
 ## 下载安装
 
@@ -16,13 +16,18 @@ Daily Papers 精选榜，按关键词订阅 arXiv 最新论文，并用你自己
 
 ## 功能一览
 
-- **今日**：精选（HF Daily Papers 当日榜，当日为空自动回退前一天）+ 订阅
+- **今日**：精选（HF Daily Papers 当日榜，默认走 hf-mirror.com 镜像国内可直连，
+  失败自动回退官方站；当日为空自动回退前一天）+ 订阅
   （多关键词 arXiv 结果合并、去重、按时间排序），下拉刷新，断网可浏览缓存
 - **书架**：稍后读 / 已读 状态管理、一句话笔记、长按呼出操作面板
-- **AI 三层阅读**：接入任意 OpenAI 兼容接口（OpenAI / DeepSeek / Kimi…），
+- **AI 三层阅读**：三种协议任选 —— OpenAI 兼容（DeepSeek / Kimi / 智谱 / OpenRouter…）、
+  Anthropic Claude、Google Gemini；常用服务商一键预设、连通性测试；
+  推理型模型（DeepSeek-R1 / Claude 思考 / Gemini 思考）的思考过程自动过滤只留正文；
   流式输出、按 (arxiv_id, layer) 本地缓存、支持重新生成
 - **搜索**：500ms 防抖实时搜索 arXiv（标题/摘要），最近 10 条历史本地保存
 - **全离线优先**：所有列表先渲染 Room 缓存，网络成功后 merge；断网冷启动全 App 可浏览
+- **国内友好**：HF 镜像站可配置（我的 → 网络）；arXiv 直连无需配置；
+  AI 可接国内可直连服务商，官方接口（OpenAI/Anthropic/Gemini）也可自行填中转地址
 
 ## 设计与动效
 

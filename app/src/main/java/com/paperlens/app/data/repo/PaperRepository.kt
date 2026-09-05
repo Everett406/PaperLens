@@ -4,6 +4,8 @@ import com.paperlens.app.data.db.AppDatabase
 import com.paperlens.app.data.db.PaperEntity
 import com.paperlens.app.data.db.toDomain
 import com.paperlens.app.data.db.toEntity
+import com.paperlens.app.data.prefs.AppSettings
+import com.paperlens.app.data.prefs.SettingsStore
 import com.paperlens.app.data.remote.ArxivApi
 import com.paperlens.app.data.remote.ArxivAtomParser
 import com.paperlens.app.data.remote.HfApi
@@ -23,8 +25,9 @@ import java.time.OffsetDateTime
 /**
  * 论文仓：负责「今日」两个信息流的抓取/缓存/合并与 arXiv 搜索。
  *
- * 拉取策略（对应规格第三节）：
- * - 精选：HF Daily Papers 当日榜（本地时区），当天为空自动回退前一天；
+ * 拉取策略（对应规格第三节，v1.1 国内可达性增强）：
+ * - 精选：HF Daily Papers 当日榜（本地时区），镜像站优先（默认 hf-mirror.com，国内直连）、
+ *   失败自动回退官方站；当天为空自动回退前一天；
  *   缓存超过 6 小时才后台刷新，列表永远先渲染 Room 缓存；
  * - 订阅：所有启用关键词的 arXiv 最新结果，逐关键词抓取、按 arxiv_id 去重（主键天然去重）、
  *   按发布时间排序；缓存 30 分钟内不重复拉（arXiv 更新频繁且量小）；
@@ -36,6 +39,7 @@ class PaperRepository(
     private val hfApi: HfApi,
     private val arxivApi: ArxivApi,
     private val db: AppDatabase,
+    private val settingsStore: SettingsStore,
 ) {
 
     private val arxivGate = Mutex()
@@ -58,12 +62,15 @@ class PaperRepository(
         }
         runCatching {
             val today = LocalDate.now()
-            var entries = runCatching { hfApi.dailyPapers(today.toString()) }.getOrElse { emptyList() }
-            if (entries.isEmpty()) {
-                // 当天为空（或接口异常）→ 回退前一天
-                val yesterday = today.minusDays(1)
-                entries = runCatching { hfApi.dailyPapers(yesterday.toString()) }.getOrElse { emptyList() }
-            }
+            val yesterday = today.minusDays(1)
+            // 拉取链：镜像今天 → 官方今天 → 镜像昨天 → 官方昨天
+            //（镜像国内可直连；官方兜底防镜像站不同步；昨天兜底防当日未更新）
+            val mirror = hfMirrorBase()
+            val official = AppSettings.DEFAULT_HF_MIRROR_URL_OFFICIAL
+            var entries = fetchDaily(mirror, today)
+            if (entries.isEmpty()) entries = fetchDaily(official, today)
+            if (entries.isEmpty()) entries = fetchDaily(mirror, yesterday)
+            if (entries.isEmpty()) entries = fetchDaily(official, yesterday)
             val now = System.currentTimeMillis()
             val entities = entries.mapNotNull { entry ->
                 val p = entry.paper ?: return@mapNotNull null
@@ -143,6 +150,17 @@ class PaperRepository(
     }
 
     /** —— 内部 —— */
+
+    /** 用户设置的镜像基址（归一化；空回落默认镜像）。 */
+    private suspend fun hfMirrorBase(): String {
+        val configured = runCatching { settingsStore.settings.first().hfMirror }
+            .getOrNull().orEmpty().trim().trimEnd('/')
+        return configured.ifEmpty { AppSettings.DEFAULT_HF_MIRROR }
+    }
+
+    private suspend fun fetchDaily(base: String, date: LocalDate) =
+        runCatching { hfApi.dailyPapers("$base/api/daily_papers", date.toString()) }
+            .getOrElse { emptyList() }
 
     private suspend fun storeArxivEntries(
         entries: List<ArxivAtomParser.Entry>,

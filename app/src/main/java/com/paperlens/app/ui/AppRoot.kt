@@ -61,6 +61,7 @@ import com.paperlens.app.ui.components.UiIcons
 import com.paperlens.app.ui.components.appHazeSource
 import com.paperlens.app.ui.components.rememberAppHazeState
 import com.paperlens.app.ui.detail.DetailScreen
+import com.paperlens.app.ui.mine.AiSettingsScreen
 import com.paperlens.app.ui.mine.MineScreen
 import com.paperlens.app.ui.mine.VersionScreen
 import com.paperlens.app.ui.nav.Routes
@@ -129,7 +130,22 @@ fun PaperLensRoot(graph: AppGraph) {
                             MineScreen(
                                 graph = graph,
                                 onOpenVersion = { navController.navigateSafely(Routes.VERSION) },
+                                onOpenAiSettings = { navController.navigateSafely(Routes.AI_SETTINGS) },
                             )
+                        }
+                        composable(
+                            Routes.AI_SETTINGS,
+                            // 子页转场与 VERSION 等统一：slide-from-bottom + fade，返回反向
+                            enterTransition = {
+                                slideInVertically(spring(dampingRatio = 0.9f, stiffness = 380f)) { it } +
+                                    fadeIn(tween(170))
+                            },
+                            popExitTransition = {
+                                slideOutVertically(spring(dampingRatio = 0.95f, stiffness = 420f)) { it } +
+                                    fadeOut(tween(150))
+                            },
+                        ) {
+                            AiSettingsScreen(onBack = { navController.popBackStack() }, graph = graph)
                         }
                         composable(
                             Routes.SEARCH,
