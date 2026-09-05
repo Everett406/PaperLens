@@ -62,6 +62,8 @@ fun PaperCard(
     modifier: Modifier = Modifier,
     note: String? = null,
     statusLabel: String? = null,
+    onStatusClick: (() -> Unit)? = null,
+    matchScore: Int? = null,
     onLongClick: (() -> Unit)? = null,
     sharedScope: SharedTransitionScope? = null,
     animScope: AnimatedVisibilityScope? = null,
@@ -136,6 +138,23 @@ fun PaperCard(
                                 )
                             }
                         }
+                        if (matchScore != null) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .background(colors.primaryContainer.copy(alpha = 0.2f), SuperellipseShape(100.dp))
+                                    .padding(horizontal = 8.dp, vertical = 2.dp),
+                            ) {
+                                TintedIcon(UiIcons.Sparkle, size = 10.dp, tint = colors.primary)
+                                Spacer(Modifier.width(3.dp))
+                                Text(
+                                    text = "匹配 ${matchScore.coerceIn(0, 99)}%",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = colors.primary,
+                                )
+                            }
+                        }
                         if (saved) {
                             SavedPill()
                         }
@@ -143,6 +162,15 @@ fun PaperCard(
                             Row(
                                 modifier = Modifier
                                     .background(colors.primaryContainer.copy(alpha = 0.18f), SuperellipseShape(100.dp))
+                                    .then(
+                                        if (onStatusClick != null) {
+                                            Modifier.clickable(
+                                                interactionSource = remember { MutableInteractionSource() },
+                                                indication = null,
+                                                onClick = onStatusClick,
+                                            )
+                                        } else Modifier
+                                    )
                                     .padding(horizontal = 8.dp, vertical = 2.dp),
                             ) {
                                 Text(

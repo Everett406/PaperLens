@@ -39,6 +39,8 @@ data class AppSettings(
     val aiApiKey: String = "",
     val aiModel: String = "",
     val aiProtocol: AiProtocol = AiProtocol.OPENAI,
+    /** AI 每日精选用 Embedding 模型（v1.5，仅 OpenAI 兼容协议）。 */
+    val embeddingModel: String = DEFAULT_EMBEDDING_MODEL,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     /** 动态取色种子色（ARGB）。 */
     val seedColor: Int = DEFAULT_SEED,
@@ -52,6 +54,7 @@ data class AppSettings(
 
     companion object {
         const val DEFAULT_SEED: Int = 0xFF3D7EFF.toInt()
+        const val DEFAULT_EMBEDDING_MODEL: String = "text-embedding-3-small"
     }
 }
 
@@ -63,6 +66,7 @@ class SettingsStore(private val context: Context) {
         val aiApiKey = stringPreferencesKey("ai_api_key")
         val aiModel = stringPreferencesKey("ai_model")
         val aiProtocol = stringPreferencesKey("ai_protocol")
+        val embeddingModel = stringPreferencesKey("embedding_model")
         val themeMode = stringPreferencesKey("theme_mode")
         val seedColor = intPreferencesKey("seed_color")
     }
@@ -75,6 +79,8 @@ class SettingsStore(private val context: Context) {
                 aiApiKey = p[Keys.aiApiKey].orEmpty(),
                 aiModel = p[Keys.aiModel].orEmpty(),
                 aiProtocol = AiProtocol.from(p[Keys.aiProtocol]),
+                embeddingModel = p[Keys.embeddingModel]?.takeIf { it.isNotBlank() }
+                    ?: AppSettings.DEFAULT_EMBEDDING_MODEL,
                 themeMode = runCatching { ThemeMode.valueOf(p[Keys.themeMode] ?: "") }
                     .getOrDefault(ThemeMode.SYSTEM),
                 seedColor = p[Keys.seedColor] ?: AppSettings.DEFAULT_SEED,
@@ -93,6 +99,10 @@ class SettingsStore(private val context: Context) {
             p[Keys.aiModel] = model.trim()
             p[Keys.aiProtocol] = protocol.name
         }
+    }
+
+    suspend fun setEmbeddingModel(model: String) {
+        context.dataStore.edit { it[Keys.embeddingModel] = model.trim() }
     }
 
     suspend fun setThemeMode(mode: ThemeMode) {

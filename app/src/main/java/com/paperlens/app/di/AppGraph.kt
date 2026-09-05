@@ -3,11 +3,14 @@ package com.paperlens.app.di
 import android.content.Context
 import com.paperlens.app.ai.AiClient
 import com.paperlens.app.data.db.AppDatabase
+import com.paperlens.app.data.prefs.CacheStore
 import com.paperlens.app.data.prefs.SettingsStore
 import com.paperlens.app.data.remote.ArxivApi
 import com.paperlens.app.data.remote.FeedMirrorClient
 import com.paperlens.app.data.remote.NetDiag
+import com.paperlens.app.data.repo.AiReadManager
 import com.paperlens.app.data.repo.AiRepository
+import com.paperlens.app.data.repo.CuratedRepository
 import com.paperlens.app.data.repo.PaperRepository
 import com.paperlens.app.data.repo.SearchRepository
 import com.paperlens.app.data.repo.ShelfRepository
@@ -24,6 +27,8 @@ import java.util.concurrent.TimeUnit
  * 单例生命周期与 Application 一致；构造即完成组装，无反射、无注解处理器魔法。
  */
 class AppGraph(context: Context) {
+
+    private val appContext = context.applicationContext
 
     val json: Json = Json {
         ignoreUnknownKeys = true
@@ -68,6 +73,7 @@ class AppGraph(context: Context) {
 
     val database: AppDatabase = AppDatabase.build(context)
     val settingsStore: SettingsStore = SettingsStore(context)
+    val cacheStore: CacheStore = CacheStore(appContext)
     val aiClient: AiClient = AiClient(aiOkHttpClient, json)
 
     val paperRepository: PaperRepository by lazy {
@@ -76,5 +82,13 @@ class AppGraph(context: Context) {
     val shelfRepository: ShelfRepository by lazy { ShelfRepository(database) }
     val subscriptionRepository: SubscriptionRepository by lazy { SubscriptionRepository(database) }
     val searchRepository: SearchRepository by lazy { SearchRepository(database) }
-    val aiRepository: AiRepository by lazy { AiRepository(aiClient, database, settingsStore) }
+    val aiRepository: AiRepository by lazy { AiRepository(aiClient, database, settingsStore, cacheStore) }
+
+    /** AI 阅读后台队列：App 级生命周期，返回/切页不中断生成，全局悬浮指示器数据源。 */
+    val aiReadManager: AiReadManager by lazy { AiReadManager(aiRepository) }
+
+    /** AI 每日精选：书架收藏 Embedding 画像 × 当日论文匹配。 */
+    val curatedRepository: CuratedRepository by lazy {
+        CuratedRepository(aiClient, settingsStore, shelfRepository, paperRepository, cacheStore)
+    }
 }

@@ -47,7 +47,7 @@ import com.paperlens.app.ui.components.SpringTabs
 import com.paperlens.app.ui.components.TintedIcon
 import com.paperlens.app.ui.components.UiIcons
 import com.paperlens.app.ui.rememberScrollToHide
-import com.paperlens.app.ui.nav.ScrollToHideController
+import com.paperlens.app.ui.nav.LocalBottomBarHideController
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -55,6 +55,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
  * 书架页（规格二 2）：状态 chips + 收藏卡片（切换状态/一句话笔记/移除）。
  * 移除入口 = 长按卡片弹出操作面板（规格允许「滑动或长按」，选长按：
  * 滑动移除与 LazyColumn 垂直滚动手势在小屏易误触，长按更稳）。
+ * v1.5：状态标签可直接点按循环切换（未分类→稍后读→已读），不再只藏在长按里。
  */
 @OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
@@ -69,7 +70,7 @@ fun ShelfScreen(
     )
     val ui by vm.ui.collectAsStateWithLifecycle()
 
-    val scrollController = remember { ScrollToHideController() }
+    val scrollController = LocalBottomBarHideController.current ?: return
     val listState = rememberLazyListState()
     rememberScrollToHide(listState, scrollController)
 
@@ -100,6 +101,13 @@ fun ShelfScreen(
                 .padding(horizontal = 16.dp),
         )
         Spacer(Modifier.height(10.dp))
+        Text(
+            text = "长按卡片可改分类、写笔记或移出；点卡片上的状态标签也能快速切换",
+            fontSize = 11.5.sp,
+            color = colors.onSurfaceVariantActions,
+            modifier = Modifier.padding(horizontal = 20.dp),
+        )
+        Spacer(Modifier.height(10.dp))
 
         if (ui.items.isEmpty()) {
             EmptyState(
@@ -123,6 +131,7 @@ fun ShelfScreen(
                         onToggleSave = { vm.toggleSave(item.paper, saved) },
                         note = item.note,
                         statusLabel = if (item.status == ShelfStatus.NONE) null else item.status.label,
+                        onStatusClick = { vm.setStatus(item.paper.arxivId, nextStatus(item.status)) },
                         onLongClick = { actionTarget = item },
                         sharedScope = sharedScope,
                         animScope = animScope,
@@ -245,4 +254,11 @@ fun ShelfScreen(
             }
         }
     }
+}
+
+/** 状态标签点按循环：未分类 → 稍后读 → 已读 → 未分类。 */
+private fun nextStatus(current: ShelfStatus): ShelfStatus = when (current) {
+    ShelfStatus.NONE -> ShelfStatus.LATER
+    ShelfStatus.LATER -> ShelfStatus.READ
+    ShelfStatus.READ -> ShelfStatus.NONE
 }

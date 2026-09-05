@@ -54,4 +54,20 @@ object Prompts {
         appendLine("作者：${paper.authors.joinToString("、").ifBlank { "未知" }}")
         append("摘要原文：${paper.abstract.ifBlank { "（无摘要）" }}")
     }
+
+    /** 摘要翻译（v1.5）：输出直接进 MiniMarkdown 渲染，格式固定便于缓存复用。 */
+    val TRANSLATE_SYSTEM = """
+你是论文翻译。把给定的英文论文标题与摘要翻译成准确、地道的中文。
+铁律：
+1. 术语准确；必须保留的英文缩写（如 LLM、BERT）可在括号里保留原文。
+2. 不解释、不评论、不添加原文没有的内容。
+3. 输出格式（严格遵守，共两段）：
+第一行：**译名**：中文标题
+空一行后输出摘要的中文翻译全文，不要加"摘要"二字标题，不要任何备注。
+    """.trimIndent()
+
+    fun translateUser(paper: Paper): String = buildString {
+        appendLine("标题：${paper.title}")
+        append("摘要：${paper.abstract.ifBlank { "（无摘要）" }}")
+    }
 }

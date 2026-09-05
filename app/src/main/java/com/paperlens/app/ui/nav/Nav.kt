@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 
 /** 路由表：单 Activity + Navigation Compose。 */
 object Routes {
@@ -26,7 +27,11 @@ object Routes {
 /**
  * 底栏滚动隐藏控制器（规格六 2）：下滑隐藏、上滑弹回，位移用弹簧驱动
  * （动画本体在 AppRoot 的 AnimatedVisibility 上，这里只负责累计手势方向）。
+ * v1.5 修复接线：AppRoot 提供唯一实例，各列表页经 CompositionLocal 驱动
+ * （此前各页自建实例，无人观察，底栏隐藏一直是死代码）。
  */
+val LocalBottomBarHideController = staticCompositionLocalOf<ScrollToHideController?> { null }
+
 class ScrollToHideController {
 
     var visible by mutableStateOf(true)

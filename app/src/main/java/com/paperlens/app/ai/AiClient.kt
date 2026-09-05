@@ -29,10 +29,11 @@ import java.net.UnknownHostException
  * - ANTHROPIC：Messages API（x-api-key + anthropic-version 头，event/data 行协议）；
  * - GEMINI：Generative Language API（streamGenerateContent?alt=sse）。
  *
- * 思考模型兼容（v1.1）：推理型模型的思考过程一律不进正文——
- * - OpenAI 兼容：忽略 delta.reasoning_content；正文中的 <think>…</think> 由 [ThinkTagFilter] 流式剥除；
- * - Anthropic：只渲染 text_delta，忽略 thinking_delta；
- * - Gemini：忽略带 thought 标记的 parts。
+ * 思考模型兼容（v1.5 起可见）：推理过程统一经 onThinking 回调上屏（UI 可折叠展示），绝不混入正文——
+ * - OpenAI 兼容：delta.reasoning_content → onThinking；正文中的 <think>…</think> 由 [ThinkTagFilter]
+ *   流式拆分（思考进 onThinking、正文进 onDelta）；
+ * - Anthropic：thinking_delta → onThinking，text_delta → 正文；
+ * - Gemini：thought 标记的 parts → onThinking。
  *
  * 取消安全：协程取消时立刻 cancel 底层 HTTP 调用；失败时已生成的部分文本会返回。
  */
@@ -40,6 +41,10 @@ class AiClient(
     private val client: OkHttpClient,
     private val json: Json,
 ) {
+    private companion object {
+        /** Embeddings 单批上限：超过自动分批。 */
+        const val EMBED_BATCH = 64
+    }
 
     // —— DTO（全部可空 + 默认值：上游字段偶有缺省，绝不让解析炸掉流） ——
 
@@ -53,7 +58,7 @@ class AiClient(
         @Serializable
         data class Delta(
             @SerialName("content") val content: String? = null,
-            // 推理型模型（DeepSeek-R1 等）的思考增量：明确解析但从不渲染
+            // 推理型模型（DeepSeek-R1 等）的思考增量：v1.5 起实时上屏（可折叠），不混入正文
             @SerialName("reasoning_content") val reasoningContent: String? = null,
         )
     }
@@ -82,6 +87,8 @@ class AiClient(
         data class Delta(
             @SerialName("type") val type: String? = null,
             @SerialName("text") val text: String? = null,
+            // thinking_delta 的思考增量字段名是 thinking（不是 text）
+            @SerialName("thinking") val thinking: String? = null,
         )
 
         @Serializable
@@ -113,7 +120,7 @@ class AiClient(
         @Serializable
         data class Part(
             @SerialName("text") val text: String? = null,
-            // Gemini 2.5 思考标记：true 表示该段是思考过程，不渲染
+            // Gemini 2.5 思考标记：true 表示该段是思考过程，v1.5 起实时上屏（可折叠）
             @SerialName("thought") val thought: Boolean? = null,
         )
 
@@ -121,6 +128,33 @@ class AiClient(
         data class GeminiError(
             @SerialName("code") val code: Int? = null,
             @SerialName("message") val message: String? = null,
+        )
+    }
+
+    @Serializable
+    private data class ModelsResponse(
+        @SerialName("data") val data: List<ModelItem> = emptyList(),
+    ) {
+        @Serializable
+        data class ModelItem(@SerialName("id") val id: String = "")
+    }
+
+    @Serializable
+    private data class GeminiModelsResponse(
+        @SerialName("models") val models: List<ModelEntry> = emptyList(),
+    ) {
+        @Serializable
+        data class ModelEntry(@SerialName("name") val name: String = "")
+    }
+
+    @Serializable
+    private data class EmbedResponse(
+        @SerialName("data") val data: List<EmbedItem> = emptyList(),
+    ) {
+        @Serializable
+        data class EmbedItem(
+            @SerialName("index") val index: Int = 0,
+            @SerialName("embedding") val embedding: List<Double> = emptyList(),
         )
     }
 
@@ -152,10 +186,29 @@ class AiClient(
         }
     }
 
+    /** 模型列表端点（归一规则与 [endpoint] 同族）。 */
+    private fun modelsEndpoint(settings: AppSettings): String {
+        val raw = settings.effectiveAiBaseUrl.trim()
+        val explicit = raw.endsWith("#")
+        val base = raw.trimEnd('#').trim().trimEnd('/')
+        return when (settings.aiProtocol) {
+            AiProtocol.OPENAI ->
+                if (explicit || Regex("/v\\d+$").containsMatchIn(base)) "$base/models" else "$base/v1/models"
+            AiProtocol.ANTHROPIC ->
+                if (explicit) "$base/v1/models"
+                else if (Regex("/v\\d+$").containsMatchIn(base)) "$base/models"
+                else "$base/v1/models"
+            AiProtocol.GEMINI ->
+                if (explicit || Regex("/v\\d+[a-z]*$").containsMatchIn(base)) "$base/models" else "$base/v1beta/models"
+        }
+    }
+
     // —— 流式对话 ——
 
     /**
-     * 流式对话。onDelta 回调的是「过滤思考后」的正文增量。
+     * 流式对话。onDelta 回调「过滤思考后」的正文增量；onThinking 回调思考过程增量
+     * （v1.5 起不再丢弃：OpenAI reasoning_content / Anthropic thinking_delta /
+     * Gemini thought parts / 正文中的 <think>…</think> 四路归一到这里）。
      * 成功返回完整正文；失败时若已有部分输出则返回部分，否则抛 IOException（含中文排障提示）。
      */
     suspend fun streamChat(
@@ -163,6 +216,7 @@ class AiClient(
         systemPrompt: String,
         userPrompt: String,
         onDelta: (String) -> Unit,
+        onThinking: (String) -> Unit = {},
     ): String = withContext(Dispatchers.IO) {
         val body = when (settings.aiProtocol) {
             AiProtocol.OPENAI -> openAiBody(settings.aiModel, systemPrompt, userPrompt, stream = true)
@@ -195,9 +249,10 @@ class AiClient(
                             if (payload == "[DONE]") break
                             if (payload.isEmpty()) continue
                             runCatching { json.decodeFromString<OpenAiChunk>(payload) }.getOrNull()
-                                ?.choices?.firstOrNull()?.delta?.content
-                                ?.takeIf { it.isNotEmpty() }
-                                ?.let { filter.feed(it, ::emitText) }
+                                ?.choices?.firstOrNull()?.delta?.let { delta ->
+                                    delta.reasoningContent?.takeIf { it.isNotEmpty() }?.let(onThinking)
+                                    delta.content?.takeIf { it.isNotEmpty() }?.let { filter.feed(it, ::emitText, onThinking) }
+                                }
                         }
                         AiProtocol.ANTHROPIC -> {
                             val payload = line.removePrefix("data:").trim().takeIf { line.startsWith("data:") } ?: continue
@@ -206,9 +261,12 @@ class AiClient(
                             if (event.type == "error") {
                                 throw IOException("服务商返回错误：${event.error?.message.orEmpty().take(160)}")
                             }
-                            // 只渲染 text_delta；thinking_delta（思考过程）直接丢弃
-                            if (event.type == "content_block_delta" && event.delta?.type == "text_delta") {
-                                event.delta.text?.takeIf { it.isNotEmpty() }?.let { filter.feed(it, ::emitText) }
+                            if (event.type == "content_block_delta") {
+                                if (event.delta?.type == "thinking_delta") {
+                                    event.delta.thinking?.takeIf { it.isNotEmpty() }?.let(onThinking)
+                                } else if (event.delta?.type == "text_delta") {
+                                    event.delta.text?.takeIf { it.isNotEmpty() }?.let { filter.feed(it, ::emitText, onThinking) }
+                                }
                             }
                         }
                         AiProtocol.GEMINI -> {
@@ -217,14 +275,17 @@ class AiClient(
                             val chunk = runCatching { json.decodeFromString<GeminiChunk>(payload) }.getOrNull() ?: continue
                             chunk.error?.let { throw IOException("服务商返回错误：${it.message.orEmpty().take(160)}") }
                             chunk.candidates.firstOrNull()?.content?.parts?.forEach { part ->
-                                if (part.thought == true) return@forEach
-                                part.text?.takeIf { it.isNotEmpty() }?.let { filter.feed(it, ::emitText) }
+                                if (part.thought == true) {
+                                    part.text?.takeIf { it.isNotEmpty() }?.let(onThinking)
+                                } else {
+                                    part.text?.takeIf { it.isNotEmpty() }?.let { filter.feed(it, ::emitText, onThinking) }
+                                }
                             }
                         }
                     }
                 }
             }
-            filter.flush(::emitText)
+            filter.flush(::emitText, onThinking)
         } catch (ce: CancellationException) {
             throw ce
         } catch (e: Exception) {
@@ -236,6 +297,95 @@ class AiClient(
         }
         full.toString()
     }
+
+    // —— 模型列表 / Embeddings ——
+
+    /**
+     * 从服务商拉取可用模型列表（v1.5）：OpenAI 兼容与 Anthropic 返回 data[].id，
+     * Gemini 返回 models[].name（去掉 models/ 前缀）。端点归一规则与 [endpoint] 一致。
+     */
+    suspend fun listModels(settings: AppSettings): Result<List<String>> = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url(modelsEndpoint(settings))
+            .get()
+            .let { applyAuth(it, settings) }
+            .build()
+        try {
+            client.newCall(request).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    return@withContext Result.failure(httpError(resp.code, resp.body?.string().orEmpty()))
+                }
+                val text = resp.body?.string().orEmpty()
+                val models = when (settings.aiProtocol) {
+                    AiProtocol.OPENAI, AiProtocol.ANTHROPIC ->
+                        runCatching { json.decodeFromString<ModelsResponse>(text) }.getOrNull()
+                            ?.data?.map { it.id }.orEmpty()
+                    AiProtocol.GEMINI ->
+                        runCatching { json.decodeFromString<GeminiModelsResponse>(text) }.getOrNull()
+                            ?.models?.map { it.name.removePrefix("models/") }.orEmpty()
+                }.filter { it.isNotBlank() }.distinct().sorted()
+                if (models.isEmpty()) {
+                    Result.failure(IOException("没有解析到模型列表，可手动填写模型名"))
+                } else {
+                    Result.success(models)
+                }
+            }
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * 批量文本向量化（v1.5，AI 每日精选用）。目前支持 OpenAI 兼容 /embeddings 协议；
+     * 输入超过 64 条自动分批。返回向量顺序与输入一一对应。
+     */
+    suspend fun embedTexts(settings: AppSettings, inputs: List<String>): Result<List<FloatArray>> =
+        withContext(Dispatchers.IO) {
+            if (settings.aiProtocol != AiProtocol.OPENAI) {
+                return@withContext Result.failure(
+                    IllegalStateException("Embedding 暂只支持 OpenAI 兼容协议（可在 AI 设置切换）"),
+                )
+            }
+            val raw = settings.effectiveAiBaseUrl.trim()
+            val explicit = raw.endsWith("#")
+            val base = raw.trimEnd('#').trim().trimEnd('/')
+            val url = if (explicit || Regex("/v\\d+$").containsMatchIn(base)) "$base/embeddings" else "$base/v1/embeddings"
+
+            try {
+                val vectors = mutableListOf<FloatArray>()
+                inputs.chunked(EMBED_BATCH).forEach { batch ->
+                    val body = buildJsonObject {
+                        put("model", settings.embeddingModel)
+                        putJsonArray("input") { batch.forEach { add(it) } }
+                    }.toString()
+                    val request = Request.Builder()
+                        .url(url)
+                        .post(body.toRequestBody("application/json".toMediaType()))
+                        .let { applyAuth(it, settings) }
+                        .build()
+                    client.newCall(request).execute().use { resp ->
+                        if (!resp.isSuccessful) throw httpError(resp.code, resp.body?.string().orEmpty())
+                        val parsed = runCatching {
+                            json.decodeFromString<EmbedResponse>(resp.body?.string().orEmpty())
+                        }.getOrNull() ?: throw IOException("Embedding 响应解析失败")
+                        parsed.data.sortedBy { it.index }.forEach { item ->
+                            vectors.add(item.embedding.map { it.toFloat() }.toFloatArray())
+                        }
+                    }
+                }
+                if (vectors.size != inputs.size) {
+                    Result.failure(IOException("Embedding 返回条数不匹配（${vectors.size}/${inputs.size}）"))
+                } else {
+                    Result.success(vectors)
+                }
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+        }
 
     // —— 连通性测试 ——
 
@@ -341,6 +491,11 @@ class AiClient(
             .url(endpoint(settings, stream))
             .header("Accept", "text/event-stream")
             .post(body.toRequestBody("application/json".toMediaType()))
+        return applyAuth(builder, settings).build()
+    }
+
+    /** 按协议写鉴权头（流式/测试/模型列表/embeddings 共用）。 */
+    private fun applyAuth(builder: Request.Builder, settings: AppSettings): Request.Builder {
         when (settings.aiProtocol) {
             AiProtocol.OPENAI -> builder.header("Authorization", "Bearer ${settings.aiApiKey}")
             AiProtocol.ANTHROPIC -> {
@@ -349,7 +504,7 @@ class AiClient(
             }
             AiProtocol.GEMINI -> builder.header("x-goog-api-key", settings.aiApiKey)
         }
-        return builder.build()
+        return builder
     }
 
     /** HTTP 错误 → 带中文排障提示的 IOException（截断响应体防止刷屏）。 */
@@ -367,27 +522,30 @@ class AiClient(
 }
 
 /**
- * 流式安全的 `<think>…</think>` 剥除器：
+ * 流式安全的 `<think>…</think>` 处理器（v1.5：不再丢弃思考内容，改经 emitThink 回调上屏）：
  * 思考内容跨增量出现、标签本身也可能被拆在两个增量里（"<thin" + "k>"），逐字缓冲处理。
- * 顺带去掉正文开头的水位空白，避免渲染时顶部出现空行。
+ * 正文开头的水位空白仍然去掉，避免渲染时顶部出现空行。
  */
 internal class ThinkTagFilter {
     private var insideThink = false
     private var pending = StringBuilder()
     private var emittedAny = false
 
-    fun feed(chunk: String, emit: (String) -> Unit) {
+    fun feed(chunk: String, emit: (String) -> Unit, emitThink: (String) -> Unit) {
         var text = pending.append(chunk).toString()
         pending = StringBuilder()
         while (true) {
             if (insideThink) {
                 val close = text.indexOf(END_TAG)
                 if (close < 0) {
-                    // 尾部可能是被截断的 "</thin"，留到下个增量再判断；思考本体全部丢弃
+                    // 尾部可能是被截断的 "</thin"，留到下个增量再判断；思考本体实时回调
                     val keep = partialSuffixLen(text, END_TAG)
+                    val thinkOut = text.dropLast(keep)
+                    if (thinkOut.isNotEmpty()) emitThink(thinkOut)
                     pending.append(text.takeLast(keep))
                     return
                 }
+                if (close > 0) emitThink(text.take(close))
                 text = text.substring(close + END_TAG.length).trimStart('\n', '\r', ' ')
                 insideThink = false
                 continue
@@ -396,28 +554,28 @@ internal class ThinkTagFilter {
             if (open < 0) {
                 val keep = partialSuffixLen(text, START_TAG)
                 val out = text.dropLast(keep)
-                if (out.isNotEmpty()) emitText(out, emit)
+                if (out.isNotEmpty()) emitText2(out, emit)
                 pending.append(text.takeLast(keep))
                 return
             }
-            if (open > 0) emitText(text.take(open), emit)
-            val close = text.indexOf(END_TAG, open)
-            if (close < 0) {
-                insideThink = true
-                return
-            }
-            text = text.substring(close + END_TAG.length).trimStart('\n', '\r', ' ')
+            if (open > 0) emitText2(text.take(open), emit)
+            text = text.substring(open + START_TAG.length)
+            insideThink = true
+            // 思考内容可能在同一增量里紧接开始，继续循环处理
         }
     }
 
     /** 流结束：把缓冲里剩下的非思考文本吐出去（被截断的普通 "<thin" 之类）。 */
-    fun flush(emit: (String) -> Unit) {
+    fun flush(emit: (String) -> Unit, emitThink: (String) -> Unit) {
         val rest = pending.toString()
         pending = StringBuilder()
-        if (!insideThink && rest.isNotEmpty()) emitText(rest, emit)
+        when {
+            insideThink -> if (rest.isNotEmpty()) emitThink(rest)
+            rest.isNotEmpty() -> emitText2(rest, emit)
+        }
     }
 
-    private fun emitText(s: String, emit: (String) -> Unit) {
+    private fun emitText2(s: String, emit: (String) -> Unit) {
         if (!emittedAny) {
             val trimmed = s.trimStart('\n', '\r', '\t', ' ')
             if (trimmed.isEmpty()) return

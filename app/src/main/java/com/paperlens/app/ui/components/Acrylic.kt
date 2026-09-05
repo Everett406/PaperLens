@@ -16,7 +16,8 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /**
  * 亚克力（规格第五节）：全 App 只允许三处 —— 底部悬浮 Tab 胶囊、今日页顶栏、详情页吸顶操作栏。
- * 内容区 hazeSource，三处 hazeEffect：blur 20dp + surface 色 α0.72 tint（规格参数原样落地）。
+ * 内容区 hazeSource，三处 hazeEffect：blur 14dp + surface 色 α0.82 tint（v1.5 调优：
+ * 用户反馈 20dp 偏重 → 降 blur；但顶栏标题与正文曾互相透出 → 提高 tint 实度）。
  * 列表 item 层禁止出现 blur（保帧率），本文件也不提供任何 item 级 blur 入口。
  */
 
@@ -31,14 +32,14 @@ fun rememberAppHazeState(): HazeState = rememberHazeState()
 /** 内容区：所有可滚动内容经过这里登记为模糊源。 */
 fun Modifier.appHazeSource(state: HazeState): Modifier = this.hazeSource(state)
 
-/** 亚克力样式：规格指定 blur≈20dp + surface α≈0.72；微噪点提升质感。 */
+/** 亚克力样式：v1.5 调优 blur 20→14dp（更轻盈）、tint α 0.72→0.82（更挡内容）；微噪点提升质感。 */
 @Composable
 fun acrylicStyle(): HazeStyle {
     val surface = MiuixTheme.colorScheme.surface
     return HazeStyle(
         backgroundColor = surface,
-        tints = listOf(HazeTint(surface.copy(alpha = 0.72f))),
-        blurRadius = 20.dp,
+        tints = listOf(HazeTint(surface.copy(alpha = 0.82f))),
+        blurRadius = 14.dp,
         noiseFactor = 0.04f,
     )
 }

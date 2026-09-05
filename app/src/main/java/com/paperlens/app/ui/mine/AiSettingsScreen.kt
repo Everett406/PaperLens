@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
@@ -24,6 +26,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -36,7 +39,9 @@ import com.paperlens.app.data.prefs.AiProtocol
 import com.paperlens.app.di.AppGraph
 import com.paperlens.app.ui.components.AppTextField
 import com.paperlens.app.ui.components.Corners
+import com.paperlens.app.ui.components.PaperDialog
 import com.paperlens.app.ui.components.PrimaryButton
+import com.paperlens.app.ui.components.SecondaryButton
 import com.paperlens.app.ui.components.SuperellipseShape
 import com.paperlens.app.ui.components.SpringTabs
 import com.paperlens.app.ui.components.TintedIcon
@@ -144,6 +149,18 @@ fun AiSettingsScreen(
                 onValueChange = { v -> vm.updateDraft { it.copy(model = v) } },
                 placeholder = "模型名（${ui.draft.protocol.modelHint}）",
             )
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                SecondaryButton(
+                    text = if (ui.modelsLoading) "拉取中…" else "从服务商拉取模型列表",
+                    onClick = vm::fetchModels,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            ui.modelsMessage?.let { msg ->
+                Spacer(Modifier.height(6.dp))
+                Text(text = msg, fontSize = 12.sp, color = colors.error)
+            }
             Spacer(Modifier.height(10.dp))
             PrimaryButton(
                 text = if (ui.testState == AiSettingsViewModel.TestState.TESTING) "测试中…" else "测试连通性",
@@ -172,16 +189,72 @@ fun AiSettingsScreen(
             )
         }
 
+        SectionCard(title = "AI 每日精选") {
+            Text(
+                text = "把书架收藏的论文向量化成你的口味画像（Embedding），再与当天抓到的论文逐一算匹配度，" +
+                    "最对味的几篇会进入「今日 · 精选」。收藏满 3 篇即可启用，收藏越多画像越准。",
+                fontSize = 12.sp,
+                lineHeight = 18.sp,
+                color = colors.onSurfaceVariantSummary,
+            )
+            Spacer(Modifier.height(10.dp))
+            AppTextField(
+                value = ui.embeddingModel,
+                onValueChange = vm::updateEmbeddingModel,
+                placeholder = "Embedding 模型名（如 text-embedding-3-small / BAAI/bge-m3）",
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "Embedding 暂只支持 OpenAI 兼容协议；部分服务商（如 DeepSeek）没有该接口，" +
+                    "可换用智谱（embedding-3）、硅基流动（BAAI/bge-m3）或 OpenAI 官方。",
+                fontSize = 11.5.sp,
+                lineHeight = 17.sp,
+                color = colors.onSurfaceVariantActions,
+            )
+        }
+
         SectionCard(title = "思考模型") {
             Text(
-                text = "推理型模型（DeepSeek-R1、Claude 思考、Gemini 思考、Qwen 等）的思考过程会被自动过滤，" +
-                    "只把最终正文渲染进阅读卡片；思考内容不消耗你的注意力，也不入库。",
+                text = "推理型模型（DeepSeek-R1、Claude 思考、Gemini 思考、Qwen 等）的思考过程会实时展示在阅读卡顶部" +
+                    "（可折叠：思考时自动展开，开始出正文后自动收起），生成中随时能看到它「正在动」；思考内容不入库。",
                 fontSize = 12.sp,
                 lineHeight = 18.sp,
                 color = colors.onSurfaceVariantSummary,
             )
         }
         Spacer(Modifier.height(140.dp))
+    }
+
+    // —— 模型选择弹窗 ——
+    ui.models?.let { models ->
+        PaperDialog(
+            visible = true,
+            title = "选择模型（${models.size}）",
+            onDismiss = vm::dismissModels,
+        ) {
+            LazyColumn(modifier = Modifier.height(380.dp)) {
+                items(models) { model ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(SuperellipseShape(Corners.medium))
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                            ) { vm.applyModel(model) }
+                            .padding(vertical = 11.dp, horizontal = 4.dp),
+                    ) {
+                        Text(
+                            text = model,
+                            fontSize = 14.sp,
+                            color = if (model == ui.draft.model) colors.primary else colors.onSurface,
+                            fontWeight = if (model == ui.draft.model) FontWeight.SemiBold else FontWeight.Normal,
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 

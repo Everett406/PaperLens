@@ -10,6 +10,8 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
@@ -32,6 +34,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -42,6 +45,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -51,10 +55,12 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.paperlens.app.data.prefs.AppSettings
+import com.paperlens.app.data.repo.AiReadManager
 import com.paperlens.app.di.AppGraph
 import com.paperlens.app.ui.components.AcrylicSurface
 import com.paperlens.app.ui.components.Corners
 import com.paperlens.app.ui.components.LocalHazeState
+import com.paperlens.app.ui.components.MiniSpinner
 import com.paperlens.app.ui.components.SuperellipseShape
 import com.paperlens.app.ui.components.TintedIcon
 import com.paperlens.app.ui.components.UiIcons
@@ -64,6 +70,7 @@ import com.paperlens.app.ui.detail.DetailScreen
 import com.paperlens.app.ui.mine.AiSettingsScreen
 import com.paperlens.app.ui.mine.MineScreen
 import com.paperlens.app.ui.mine.VersionScreen
+import com.paperlens.app.ui.nav.LocalBottomBarHideController
 import com.paperlens.app.ui.nav.Routes
 import com.paperlens.app.ui.nav.ScrollToHideController
 import com.paperlens.app.ui.search.SearchScreen
@@ -89,7 +96,11 @@ fun PaperLensRoot(graph: AppGraph) {
         val backStackEntry by navController.currentBackStackEntryAsState()
         val currentRoute = backStackEntry?.destination?.route
 
-        CompositionLocalProvider(LocalHazeState provides hazeState) {
+        CompositionLocalProvider(
+            LocalHazeState provides hazeState,
+            // v1.5：把底栏隐藏控制器下发给各列表页（此前接线断裂，底栏不随滚动隐藏）
+            LocalBottomBarHideController provides bottomBarController,
+        ) {
             val colors = MiuixTheme.colorScheme
             Box(
                 Modifier
@@ -100,11 +111,20 @@ fun PaperLensRoot(graph: AppGraph) {
                     NavHost(
                         navController = navController,
                         startDestination = Routes.TODAY,
-                        // Tab 间切换：轻淡入淡出（位移类动效统一走弹簧，见底栏/页面转场）
-                        enterTransition = { fadeIn(tween(150)) },
-                        exitTransition = { fadeOut(tween(150)) },
-                        popEnterTransition = { fadeIn(tween(150)) },
-                        popExitTransition = { fadeOut(tween(150)) },
+                        // Tab 间切换：淡入淡出 + 轻微缩放落差（v1.5 调优：纯交叉淡化时
+                        // 两屏文字同框重叠观感差；退出屏缩小退后、进入屏从 98.5% 弹回，拉开层次）
+                        enterTransition = {
+                            fadeIn(tween(160)) + scaleIn(initialScale = 0.985f, animationSpec = tween(160))
+                        },
+                        exitTransition = {
+                            fadeOut(tween(110)) + scaleOut(targetScale = 0.985f, animationSpec = tween(160))
+                        },
+                        popEnterTransition = {
+                            fadeIn(tween(160)) + scaleIn(initialScale = 0.985f, animationSpec = tween(160))
+                        },
+                        popExitTransition = {
+                            fadeOut(tween(110))
+                        },
                         modifier = Modifier
                             .fillMaxSize()
                             .appHazeSource(hazeState),
@@ -211,6 +231,16 @@ fun PaperLensRoot(graph: AppGraph) {
                     }
                 }
 
+                // —— AI 生成悬浮指示器（v1.5）：后台队列状态，点按跳回对应论文 ——
+                val aiPill by graph.aiReadManager.pill.collectAsStateWithLifecycle()
+                GenerationPill(
+                    state = aiPill,
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                    onClick = { job ->
+                        navController.navigateSafely(Routes.detail(job.arxivId, "ai"))
+                    },
+                )
+
                 // —— 悬浮胶囊底栏（亚克力三处之一） ——
                 val isTopTab = currentRoute in Routes.TOP_TABS
                 AnimatedVisibility(
@@ -245,6 +275,79 @@ private fun NavHostController.navigateSafely(route: String) {
         navigate(route)
     } catch (_: Exception) {
         // 理论不可达；防御重复点击竞态
+    }
+}
+
+/**
+ * AI 生成悬浮指示器（v1.5）：生成中/排队中/完成/失败四态。
+ * 挂在 App 级 —— 生成已交给后台队列，回退/切页都不打断；点按跳回对应论文详情。
+ */
+@Composable
+private fun GenerationPill(
+    state: AiReadManager.PillState?,
+    modifier: Modifier = Modifier,
+    onClick: (AiReadManager.PillState) -> Unit,
+) {
+    val colors = MiuixTheme.colorScheme
+    val navPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    AnimatedVisibility(
+        visible = state != null,
+        modifier = modifier,
+        enter = slideInVertically(spring(dampingRatio = 0.75f, stiffness = 380f)) { it / 2 } +
+            fadeIn(spring(stiffness = Spring.StiffnessMediumLow)),
+        exit = slideOutVertically(spring(dampingRatio = 0.9f, stiffness = 450f)) { it / 2 } +
+            fadeOut(spring(stiffness = Spring.StiffnessMediumLow)),
+    ) {
+        val job = state ?: return@AnimatedVisibility
+        AcrylicSurface(
+            modifier = Modifier
+                .padding(bottom = navPadding + 84.dp)
+                .clip(SuperellipseShape(26.dp))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                ) { onClick(job) },
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp),
+            ) {
+                when (job.status) {
+                    AiReadManager.Status.RUNNING, AiReadManager.Status.QUEUED ->
+                        MiniSpinner(size = 15.dp)
+                    AiReadManager.Status.DONE ->
+                        TintedIcon(UiIcons.Check, tint = colors.primary, size = 16.dp)
+                    AiReadManager.Status.FAILED ->
+                        TintedIcon(UiIcons.Close, tint = colors.error, size = 15.dp)
+                }
+                Spacer(Modifier.width(9.dp))
+                Column {
+                    Text(
+                        text = when (job.status) {
+                            AiReadManager.Status.RUNNING ->
+                                "正在生成 · ${job.layer.tabLabel}层" +
+                                    if (job.queuedCount > 0) "（还有 ${job.queuedCount} 个排队）" else ""
+                            AiReadManager.Status.QUEUED ->
+                                "排队中 · ${job.layer.tabLabel}层" +
+                                    if (job.queuedCount > 0) "（还有 ${job.queuedCount} 个排队）" else ""
+                            AiReadManager.Status.DONE -> "已生成${job.layer.tabLabel}层 · 点按查看"
+                            AiReadManager.Status.FAILED -> "生成失败 · 点按查看"
+                        },
+                        fontSize = 12.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = colors.onSurface,
+                    )
+                    Text(
+                        text = job.title,
+                        fontSize = 10.5.sp,
+                        color = colors.onSurfaceVariantSummary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(max = 250.dp),
+                    )
+                }
+            }
+        }
     }
 }
 

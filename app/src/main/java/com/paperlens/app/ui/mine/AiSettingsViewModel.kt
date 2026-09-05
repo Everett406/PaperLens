@@ -33,6 +33,12 @@ class AiSettingsViewModel(private val graph: AppGraph) : ViewModel() {
         val draft: Draft = Draft(),
         val testState: TestState = TestState.IDLE,
         val testMessage: String? = null,
+        // v1.5：云端模型列表拉取
+        val modelsLoading: Boolean = false,
+        val models: List<String>? = null,
+        val modelsMessage: String? = null,
+        // v1.5：Embedding 模型（AI 每日精选用）
+        val embeddingModel: String = AppSettings.DEFAULT_EMBEDDING_MODEL,
     )
 
     enum class TestState { IDLE, TESTING, OK, FAIL }
@@ -45,6 +51,7 @@ class AiSettingsViewModel(private val graph: AppGraph) : ViewModel() {
 
     private var draftInitialized = false
     private val draftSaver = MutableStateFlow<Draft?>(null)
+    private val embeddingSaver = MutableStateFlow<String?>(null)
 
     val presets: Map<AiProtocol, List<Preset>> = mapOf(
         AiProtocol.OPENAI to listOf(
@@ -71,6 +78,7 @@ class AiSettingsViewModel(private val graph: AppGraph) : ViewModel() {
                         it.copy(
                             settings = s,
                             draft = Draft(s.aiProtocol, s.aiBaseUrl, s.aiApiKey, s.aiModel),
+                            embeddingModel = s.embeddingModel,
                         )
                     } else {
                         it.copy(settings = s)
@@ -82,6 +90,12 @@ class AiSettingsViewModel(private val graph: AppGraph) : ViewModel() {
         viewModelScope.launch {
             draftSaver.debounce(500).collect { draft ->
                 if (draft != null) persist(draft)
+            }
+        }
+        // Embedding 模型防抖落库
+        viewModelScope.launch {
+            embeddingSaver.debounce(500).collect { model ->
+                if (model != null) graph.settingsStore.setEmbeddingModel(model)
             }
         }
     }
@@ -144,6 +158,51 @@ class AiSettingsViewModel(private val graph: AppGraph) : ViewModel() {
                     }
                 }
         }
+    }
+
+    // —— v1.5：云端模型列表 ——
+
+    /** 从服务商拉取 /models 列表，成功后弹选择框。 */
+    fun fetchModels() {
+        val draft = _ui.value.draft
+        if (draft.baseUrl.isBlank() || draft.apiKey.isBlank()) {
+            _ui.update { it.copy(modelsMessage = "请先填好 Base URL 和 API Key") }
+            return
+        }
+        _ui.update { it.copy(modelsLoading = true, modelsMessage = null) }
+        viewModelScope.launch {
+            // 拉取前先落库，保证鉴权与地址一致
+            persist(draft)
+            val probe = AppSettings(
+                aiBaseUrl = draft.baseUrl,
+                aiApiKey = draft.apiKey,
+                aiModel = draft.model,
+                aiProtocol = draft.protocol,
+            )
+            graph.aiClient.listModels(probe)
+                .onSuccess { models ->
+                    _ui.update { it.copy(modelsLoading = false, models = models) }
+                }
+                .onFailure { e ->
+                    _ui.update {
+                        it.copy(modelsLoading = false, modelsMessage = e.message ?: "拉取失败")
+                    }
+                }
+        }
+    }
+
+    fun applyModel(model: String) {
+        updateDraft { it.copy(model = model) }
+        _ui.update { it.copy(models = null) }
+    }
+
+    fun dismissModels() {
+        _ui.update { it.copy(models = null) }
+    }
+
+    fun updateEmbeddingModel(value: String) {
+        _ui.update { it.copy(embeddingModel = value) }
+        embeddingSaver.value = value
     }
 
     private suspend fun persist(draft: Draft) {

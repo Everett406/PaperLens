@@ -3,6 +3,7 @@ package com.paperlens.app.ui.today
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.paperlens.app.data.prefs.AppSettings
+import com.paperlens.app.data.repo.CuratedRepository
 import com.paperlens.app.data.repo.ShelfRepository
 import com.paperlens.app.di.AppGraph
 import com.paperlens.app.domain.Paper
@@ -14,12 +15,14 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /**
- * 今日页两种信息流（v1.3 渠道收敛，精选/HF 移除；v1.4 空态携带失败原因）：
+ * 今日页三种信息流（v1.5 新增「精选」）：
  * ALL = arXiv AI 类目最新（直连失败自动降级 GitHub 镜像）；
+ * FEATURED = AI 每日精选（书架收藏 Embedding 画像 × 当日论文匹配，AI 服务驱动）；
  * SUBSCRIPTIONS = 关键词订阅的 arXiv 合并。
  */
 enum class TodayFeed(val label: String, val origin: String) {
     ALL("全部", "all"),
+    FEATURED("精选", "feat"),
     SUBSCRIPTIONS("订阅", "sub"),
 }
 
@@ -48,6 +51,9 @@ class TodayViewModel(private val graph: AppGraph) : ViewModel() {
 
     val settings: StateFlow<AppSettings> =
         graph.settingsStore.settings.stateIn(viewModelScope, SharingStarted.Eagerly, AppSettings())
+
+    /** AI 每日精选状态（CuratedRepository 驱动，精选页直接订阅）。 */
+    val curated: StateFlow<CuratedRepository.State> = graph.curatedRepository.state
 
     /** 关键词签名：用于检测「我的」页增删/启停关键词后自动重拉订阅。 */
     private var lastKeywordSignature: String? = null
@@ -83,9 +89,11 @@ class TodayViewModel(private val graph: AppGraph) : ViewModel() {
                 if (changed && enabled.isNotEmpty()) refreshSubscriptions(force = true)
             }
         }
-        // 冷启动：缓存过期则后台刷新（全部 1h / 订阅 30min，仓库内控）
+        // 冷启动：缓存过期则后台刷新（全部 1h / 订阅 30min，仓库内控）；
+        // 精选：有缓存直接回放，首次无缓存且条件满足时自动算一次
         refreshAllFeed(force = false)
         refreshSubscriptions(force = false)
+        viewModelScope.launch { graph.curatedRepository.refresh(force = false) }
     }
 
     fun setFeed(feed: TodayFeed) {
@@ -95,8 +103,13 @@ class TodayViewModel(private val graph: AppGraph) : ViewModel() {
     fun refreshCurrent() {
         when (_ui.value.feed) {
             TodayFeed.ALL -> refreshAllFeed(force = true)
+            TodayFeed.FEATURED -> refreshCurated()
             TodayFeed.SUBSCRIPTIONS -> refreshSubscriptions(force = true)
         }
+    }
+
+    private fun refreshCurated() {
+        viewModelScope.launch { graph.curatedRepository.refresh(force = true) }
     }
 
     fun toggleSave(paper: Paper) {

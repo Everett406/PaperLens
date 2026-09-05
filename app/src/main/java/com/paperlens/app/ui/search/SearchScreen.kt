@@ -58,7 +58,7 @@ import com.paperlens.app.ui.components.SuperellipseShape
 import com.paperlens.app.ui.components.TintedIcon
 import com.paperlens.app.ui.components.UiIcons
 import com.paperlens.app.ui.rememberScrollToHide
-import com.paperlens.app.ui.nav.ScrollToHideController
+import com.paperlens.app.ui.nav.LocalBottomBarHideController
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.squircle.squircleSurface
@@ -87,8 +87,8 @@ fun SearchScreen(
     val focusRequester = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
     val listState = rememberLazyListState()
-    val scrollController = remember { ScrollToHideController() }
-    rememberScrollToHide(listState, scrollController)
+    val scrollController = LocalBottomBarHideController.current
+    if (scrollController != null) rememberScrollToHide(listState, scrollController)
 
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
 
