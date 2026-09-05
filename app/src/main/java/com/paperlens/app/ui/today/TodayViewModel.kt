@@ -1,0 +1,102 @@
+package com.paperlens.app.ui.today
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.paperlens.app.data.prefs.AppSettings
+import com.paperlens.app.data.repo.ShelfRepository
+import com.paperlens.app.di.AppGraph
+import com.paperlens.app.domain.Paper
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+
+/** 今日页两种信息流（规格二 1）：精选 = HF 当日榜；订阅 = 关键词 arXiv 合并。 */
+enum class TodayFeed(val label: String) { FEATURED("精选"), SUBSCRIPTIONS("订阅") }
+
+class TodayViewModel(private val graph: AppGraph) : ViewModel() {
+
+    data class UiState(
+        val feed: TodayFeed = TodayFeed.FEATURED,
+        val featured: List<Paper> = emptyList(),
+        val subscriptions: List<Paper> = emptyList(),
+        val savedIds: Set<String> = emptySet(),
+        val refreshing: Boolean = false,
+    ) {
+        val currentList: List<Paper>
+            get() = if (feed == TodayFeed.FEATURED) featured else subscriptions
+    }
+
+    private val _ui = MutableStateFlow(UiState())
+    val ui: StateFlow<UiState> = _ui
+
+    val settings: StateFlow<AppSettings> =
+        graph.settingsStore.settings.stateIn(viewModelScope, SharingStarted.Eagerly, AppSettings())
+
+    init {
+        // 列表永远先渲染 Room 缓存，网络成功后 merge（规格三 4）
+        viewModelScope.launch {
+            graph.paperRepository.featuredFeed.collect { list ->
+                _ui.update { it.copy(featured = list) }
+            }
+        }
+        viewModelScope.launch {
+            graph.paperRepository.subscriptionFeed.collect { list ->
+                _ui.update { it.copy(subscriptions = list) }
+            }
+        }
+        viewModelScope.launch {
+            graph.shelfRepository.observeSavedIds().collect { ids ->
+                _ui.update { it.copy(savedIds = ids) }
+            }
+        }
+        // 冷启动：缓存过期则后台刷新（精选 6h / 订阅 30min，仓库内控）
+        refreshFeatured(force = false)
+        refreshSubscriptions(force = false)
+    }
+
+    fun setFeed(feed: TodayFeed) {
+        _ui.update { it.copy(feed = feed) }
+    }
+
+    fun refreshCurrent() {
+        when (_ui.value.feed) {
+            TodayFeed.FEATURED -> refreshFeatured(force = true)
+            TodayFeed.SUBSCRIPTIONS -> refreshSubscriptions(force = true)
+        }
+    }
+
+    fun toggleSave(paper: Paper) {
+        viewModelScope.launch {
+            if (paper.arxivId in _ui.value.savedIds) {
+                graph.shelfRepository.remove(paper.arxivId)
+            } else {
+                graph.shelfRepository.save(paper)
+            }
+        }
+    }
+
+    private fun refreshFeatured(force: Boolean) {
+        viewModelScope.launch {
+            if (force) _ui.update { it.copy(refreshing = true) }
+            try {
+                graph.paperRepository.refreshFeatured(force)
+            } finally {
+                if (force) _ui.update { it.copy(refreshing = false) }
+            }
+        }
+    }
+
+    private fun refreshSubscriptions(force: Boolean) {
+        viewModelScope.launch {
+            if (force) _ui.update { it.copy(refreshing = true) }
+            try {
+                graph.paperRepository.refreshSubscriptions(force)
+            } finally {
+                if (force) _ui.update { it.copy(refreshing = false) }
+            }
+        }
+    }
+}

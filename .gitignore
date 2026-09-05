@@ -1,0 +1,13 @@
+*.iml
+.gradle/
+/local.properties
+.idea/
+.DS_Store
+build/
+/app/build/
+captures/
+.externalNativeBuild
+.cxx
+.kotlin/
+# 签名密钥与凭据绝不入库（CI 通过 GitHub Secrets 注入）
+/keystore/

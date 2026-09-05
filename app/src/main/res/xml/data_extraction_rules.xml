@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+ 数据提取规则：允许云备份与设备迁移（本地阅读数据，无敏感凭据；
+     AI API Key 存于 DataStore，一并纳入备份以便换机迁移） -->
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="root" path="." />
+        <include domain="database" path="." />
+        <include domain="sharedpref" path="." />
+        <include domain="file" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="root" path="." />
+        <include domain="database" path="." />
+        <include domain="sharedpref" path="." />
+        <include domain="file" path="." />
+    </device-transfer>
+</data-extraction-rules>

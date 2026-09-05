@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compose 应用使用原生 Material 无 ActionBar 主题做启动壳；
+         状态栏/导航栏在运行时由 enableEdgeToEdge 接管并跟随应用深浅色。 -->
+    <style name="Theme.PaperLens" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/paper_bg</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:enforceNavigationBarContrast">false</item>
+        <item name="android:enforceStatusBarContrast">false</item>
+    </style>
+</resources>

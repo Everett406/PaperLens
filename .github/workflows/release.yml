@@ -1,0 +1,142 @@
+name: Release
+
+# 发版工作流（对应需求：每发布一个版本推送一次，GitHub Actions 构建签名 APK 并发布 Release）
+# 触发方式：
+#   1. 推送 tag：  git tag v1.2.3 && git push origin v1.2.3
+#   2. 手动触发：  Actions 页面 Run workflow（仅构建产物，不发 Release）
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（如 1.2.3；留空则为 0.0.0-run<N>，仅验证构建）'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Compute version
+        id: ver
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          if [ "$REF_TYPE" = "tag" ]; then
+            VER="${REF_NAME#v}"
+          elif [ -n "$INPUT_VERSION" ]; then
+            VER="${INPUT_VERSION#v}"
+          else
+            VER="0.0.0-run${RUN_NUMBER}"
+          fi
+          # versionCode = major*1000000 + minor*1000 + patch（SemVer 单调递增）
+          MAJOR=$(echo "$VER" | cut -d. -f1)
+          MINOR=$(echo "$VER" | cut -d. -f2)
+          PATCH=$(echo "$VER" | cut -d. -f3 | cut -d- -f1)
+          CODE=$((MAJOR * 1000000 + MINOR * 1000 + PATCH))
+          echo "name=$VER" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "版本: $VER (versionCode=$CODE)"
+
+      - name: Restore keystore from secrets
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::warning::未配置签名 Secrets，本次产出未签名 APK"
+            exit 0
+          fi
+          mkdir -p keystore
+          echo "$KEYSTORE_BASE64" | base64 -d > keystore/paperlens-release.jks
+          cat > keystore/keystore.properties <<EOF
+          storeFile=paperlens-release.jks
+          storePassword=$KEYSTORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+          echo "keystore.properties 就绪"
+
+      - name: Build signed release APK
+        run: >
+          ./gradlew :app:assembleRelease --stacktrace
+          -PversionName=${{ steps.ver.outputs.name }}
+          -PversionCode=${{ steps.ver.outputs.code }}
+
+      - name: Verify signature & rename
+        run: |
+          set -euo pipefail
+          APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          BT=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
+          "$ANDROID_HOME/build-tools/$BT/apksigner" verify --print-certs "$APK" || {
+            echo "::error::签名校验失败"; exit 1; }
+          cp "$APK" "PaperLens-${{ steps.ver.outputs.name }}.apk"
+          sha256sum "PaperLens-${{ steps.ver.outputs.name }}.apk" > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PaperLens-${{ steps.ver.outputs.name }}
+          path: |
+            PaperLens-${{ steps.ver.outputs.name }}.apk
+            SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          VER: ${{ steps.ver.outputs.name }}
+        run: |
+          set -euo pipefail
+          PREV_TAG=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)
+          {
+            echo "## 纸镜 PaperLens ${VER}"
+            echo ""
+            echo "签名正式版 APK（release），下载后可直接安装。"
+            echo ""
+            if [ -n "$PREV_TAG" ]; then
+              echo "### 自 ${PREV_TAG} 以来的变更"
+              git log --pretty='- %s (%h)' "${PREV_TAG}..${TAG}"
+            else
+              echo "### 首个公开版本"
+              git log --pretty='- %s (%h)' | head -5
+            fi
+            echo ""
+            echo "---"
+            echo "SHA256 校验见附件 SHA256SUMS.txt；升级安装请保持同一签名密钥。"
+          } > RELEASE_NOTES.md
+          gh release create "$TAG" \
+            --title "纸镜 PaperLens ${VER}" \
+            --notes-file RELEASE_NOTES.md \
+            "PaperLens-${VER}.apk" \
+            SHA256SUMS.txt
